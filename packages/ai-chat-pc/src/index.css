@@ -1,0 +1,24 @@
+@import 'tailwindcss';
+
+
+@layer base {
+    body {
+        @apply bg-white text-gray-900 transition-colors duration-200;
+    }
+
+    .dark body {
+        @apply bg-black text-gray-100;
+    }
+
+
+
+    /* 添加 placeholder 样式 */
+    input::placeholder {
+        @apply text-gray-500;
+    }
+
+    .dark input::placeholder {
+        @apply text-gray-300;
+    }
+
+}
