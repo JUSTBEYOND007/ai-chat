@@ -1,79 +1,31 @@
-import { UserOutlined } from '@ant-design/icons'
-import { Bubble } from '@ant-design/x'
-import { useRef } from 'react'
-
+import { VirtualChatList } from '@pc/components/VirtualChatList'
 import { useChatStore, useConversationStore } from '@pc/store'
 
-import { allMessageContent } from './content'
-
-import type { MessageContent } from '@pc/types/chat'
-import type { GetProp, GetRef } from 'antd'
-import './bubble.css' // 添加CSS导入
+import './bubble.css'
 import 'highlight.js/styles/github.css'
 
+/**
+ * 聊天气泡组件
+ * 使用虚拟滚动优化长对话场景性能
+ */
 export const ChatBubble = () => {
-  const listRef = useRef<GetRef<typeof Bubble.List>>(null)
   const { messages } = useChatStore()
   const { selectedId } = useConversationStore()
 
-  const rolesAsObject: GetProp<typeof Bubble.List, 'roles'> = {
-    system: {
-      placement: 'start',
-      avatar: { icon: <UserOutlined />, style: { background: '#fde3cf' } },
-      variant: 'borderless',
-      style: {
-        maxWidth: '100%'
-      }
-    },
-    user: {
-      placement: 'end',
-      avatar: { icon: <UserOutlined />, style: { background: '#87d068' } }
-    },
-    file: {
-      placement: 'end',
-      variant: 'borderless'
-    },
-    image: {
-      placement: 'end',
-      variant: 'borderless'
-    }
-  }
-
+  // 获取当前会话的消息列表
   const chatMessage = selectedId ? messages.get(selectedId) : []
 
-  // 渲染消息内容
-  const renderMessageContent = (content: MessageContent[]) => {
-    if (!content || content.length === 0) {
-      return null
-    }
-
-    return content.map((item, index) => {
-      return (
-        <div key={index}>
-          {/*  eslint-disable-next-line @typescript-eslint/no-explicit-any*/}
-          {allMessageContent[item.type as keyof typeof allMessageContent](item as any)}
-        </div>
-      )
-    })
+  // 如果没有消息，返回空
+  if (!chatMessage || chatMessage.length === 0) {
+    return null
   }
 
   return (
-    <Bubble.List
-      ref={listRef}
+    <VirtualChatList
+      messages={chatMessage}
+      height={window.innerHeight * 0.75} // 占据 75% 的视口高度
+      width="50vw"
       className="chat-bubble-list"
-      style={{
-        paddingInline: 16,
-        height: '100%',
-        width: '50vw',
-        overflowY: 'auto', // 确保可以滚动但滚动条被CSS隐藏
-        paddingBottom: '25%'
-      }}
-      roles={rolesAsObject}
-      items={chatMessage?.map((message, index) => ({
-        key: index,
-        role: message.role,
-        content: renderMessageContent(message.content)
-      }))}
     />
   )
 }
