@@ -1,0 +1,23 @@
+{
+  "name": "@ai-chat/pc",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/react-transition-group": "^4.4.12",
+    "clsx": "^2.1.1",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0",
+    "markdown-it-highlightjs": "^4.2.0",
+    "react-transition-group": "^4.4.5",
+    "tailwind-merge": "^3.3.0"
+  }
+}
