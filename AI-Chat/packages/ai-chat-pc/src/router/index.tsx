@@ -8,6 +8,7 @@ import Agents from '@pc/pages/Agents'
 import CreateAccount from '@pc/pages/CreateAccount'
 import Home from '@pc/pages/Home'
 import Login from '@pc/pages/Login'
+import RagKnowledge from '@pc/pages/RagKnowledge'
 import { SharedChat } from '@pc/pages/SharedChat'
 
 // 创建React Router路由
@@ -34,6 +35,7 @@ const routeElements = createRoutesFromElements(
       <Route path="/conversation" element={<Home />} />
       <Route path="/conversation/:id" element={<Home />} />
       <Route path="/agents" element={<Agents />} />
+      <Route path="/agents/rag" element={<RagKnowledge />} />
     </Route>
   </Route>
 )

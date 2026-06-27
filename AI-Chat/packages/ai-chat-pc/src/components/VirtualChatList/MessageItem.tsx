@@ -84,6 +84,12 @@ export const MessageItem = memo<MessageItemProps>(
     }, [index, onHeightChange])
 
     const roleConfig = rolesAsObject[message.role as keyof typeof rolesAsObject]
+    const statusText =
+      message.role === 'user' && message.sendStatus === 'pending'
+        ? '发送中'
+        : message.role === 'user' && message.sendStatus === 'failed'
+          ? '发送失败，网络恢复后自动重试'
+          : ''
 
     return (
       <div ref={itemRef} style={style}>
@@ -94,6 +100,14 @@ export const MessageItem = memo<MessageItemProps>(
           style={roleConfig?.style}
           content={renderMessageContent(message.content)}
         />
+        {statusText && (
+          <div
+            className={`mt-1 text-xs text-right ${
+              message.sendStatus === 'failed' ? 'text-red-500' : 'text-gray-400'
+            }`}>
+            {statusText}
+          </div>
+        )}
       </div>
     )
   },

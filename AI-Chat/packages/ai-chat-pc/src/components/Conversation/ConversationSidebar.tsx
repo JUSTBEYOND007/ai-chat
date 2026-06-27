@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { sessionApi } from '@pc/apis/session'
 import { SearchButton } from '@pc/components/Search/SearchButton'
 import { useChatStore } from '@pc/store'
+import { chatLocalDB } from '@pc/utils/chatLocalDB'
 
 import { isImageByExtension } from '../../utils/judgeImage'
 
@@ -34,7 +35,7 @@ export function ConversationSidebar() {
     fetchConversations
   } = useConversationActions()
 
-  const { addMessage, messages } = useChatStore()
+  const { addMessage, mergeMessages, messages } = useChatStore()
 
   // 初始化时获取会话列表
   useEffect(() => {
@@ -81,6 +82,8 @@ export function ConversationSidebar() {
     navigate(`/conversation/${id}`)
 
     if (messages.get(id) !== undefined) {
+      const localMessages = await chatLocalDB.getMessages(id)
+      mergeMessages(id, localMessages)
       return
     }
 
@@ -143,6 +146,9 @@ export function ConversationSidebar() {
         role: message.role
       })
     })
+
+    const localMessages = await chatLocalDB.getMessages(id)
+    mergeMessages(id, localMessages)
   }
 
   return (

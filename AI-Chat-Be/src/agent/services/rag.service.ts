@@ -44,6 +44,7 @@ export class RagService {
   private qaChain: Runnable;
   private textSplitter: RecursiveCharacterTextSplitter;
   private documents: KnowledgeDocument[] = [...KNOWLEDGE_DOCUMENTS];
+  private useLocalFallback = false;
 
   constructor() {
     this.initializeService();
@@ -85,7 +86,10 @@ export class RagService {
       this.logger.log('RAG服务初始化完成');
     } catch (error) {
       this.logger.error('RAG服务初始化失败:', error);
-      throw error;
+      this.logger.warn(
+        'RAG will use local keyword retrieval fallback for development.',
+      );
+      this.useLocalFallback = true;
     }
   }
 
@@ -156,6 +160,10 @@ export class RagService {
 
   async query(queryDto: RagQueryDto): Promise<RagResponseDto> {
     try {
+      if (this.useLocalFallback || !this.vectorStore || !this.qaChain) {
+        return await this.queryWithLocalFallback(queryDto);
+      }
+
       const { query, k = 3, categories, scoreThreshold = 0.5 } = queryDto;
 
       // 执行相似性搜索
@@ -217,6 +225,17 @@ export class RagService {
 
   async similaritySearch(query: string, k: number = 5): Promise<any[]> {
     try {
+      if (this.useLocalFallback || !this.vectorStore) {
+        return this.localRetrieve(query, k).map(({ doc, score }, index) => ({
+          id: doc.id || `doc_${index}`,
+          title: doc.title,
+          category: doc.category,
+          content: doc.content,
+          metadata: doc.metadata,
+          score,
+        }));
+      }
+
       const results = await this.vectorStore.similaritySearch(query, k);
       return results.map((doc: DocumentWithMetadata, index: number) => ({
         id: doc.metadata.id || `doc_${index}`,
@@ -250,7 +269,9 @@ export class RagService {
       const docs = await this.prepareDocuments([newDoc]);
 
       // 添加到向量存储
-      await this.vectorStore.addDocuments(docs);
+      if (!this.useLocalFallback && this.vectorStore) {
+        await this.vectorStore.addDocuments(docs);
+      }
 
       return {
         success: true,
@@ -272,6 +293,82 @@ export class RagService {
    */
   getCategories(): string[] {
     return [...new Set(this.documents.map((doc) => doc.category))];
+  }
+
+  private async queryWithLocalFallback(
+    queryDto: RagQueryDto,
+  ): Promise<RagResponseDto> {
+    const { query, k = 3, categories } = queryDto;
+    const results = this.localRetrieve(query, k, categories);
+
+    if (results.length === 0) {
+      return {
+        answer:
+          'No related knowledge was found in the local fallback retriever. Try a more specific question.',
+        sources: [],
+        query,
+        timestamp: new Date(),
+      };
+    }
+
+    const sources = results.map(({ doc, score }, index) => ({
+      id: doc.id || `doc_${index}`,
+      title: doc.title,
+      category: doc.category,
+      score,
+      content: this.trimContent(doc.content, 220),
+    }));
+
+    return {
+      answer:
+        'Local RAG fallback retrieved the following knowledge snippets:\n\n' +
+        sources
+          .map(
+            (source, index) =>
+              `${index + 1}. [${source.title}] ${source.content}`,
+          )
+          .join('\n\n'),
+      sources,
+      query,
+      timestamp: new Date(),
+    };
+  }
+
+  private localRetrieve(
+    query: string,
+    k: number,
+    categories?: string[],
+  ): Array<{ doc: KnowledgeDocument; score: number }> {
+    const queryTokens = this.tokenize(query);
+
+    return this.documents
+      .filter((doc) => !categories?.length || categories.includes(doc.category))
+      .map((doc) => {
+        const text = `${doc.title} ${doc.category} ${doc.content}`;
+        const docTokens = new Set(this.tokenize(text));
+        const overlap = queryTokens.filter((token) => docTokens.has(token));
+        const score =
+          queryTokens.length === 0
+            ? 0
+            : Number((overlap.length / queryTokens.length).toFixed(2));
+
+        return { doc, score };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, k);
+  }
+
+  private tokenize(text: string): string[] {
+    const normalized = text.toLowerCase();
+    const tokens = normalized.match(/[a-z0-9]+|[\u4e00-\u9fa5]/g) || [];
+    return [...new Set(tokens.filter((token: string) => token.trim().length > 0))];
+  }
+
+  private trimContent(content: string, maxLength: number) {
+    const normalized = content.replace(/\s+/g, ' ').trim();
+    return normalized.length > maxLength
+      ? `${normalized.slice(0, maxLength)}...`
+      : normalized;
   }
 
   /**
@@ -352,7 +449,9 @@ export class RagService {
       }
 
       // 添加到向量存储
-      await this.vectorStore.addDocuments(documents);
+      if (!this.useLocalFallback && this.vectorStore) {
+        await this.vectorStore.addDocuments(documents);
+      }
 
       this.logger.log(
         `PDF文件处理完成: ${filePath}, 生成 ${chunks.length} 个文本块`,

@@ -13,6 +13,18 @@ const { Search } = Input
 // 模拟数据
 const mockAgents: Agent[] = [
   {
+    id: 'rag',
+    name: '知识库问答助手',
+    description:
+      '基于 RAG 的知识增强问答助手，支持文档分块、向量检索、相似度召回与引用来源展示。',
+    avatar: '📚',
+    category: '知识检索',
+    tags: ['RAG', 'Embedding', '向量检索'],
+    prompt: '基于知识库内容回答用户问题，并展示引用来源。',
+    createdAt: '2024-01-01',
+    updatedAt: '2024-01-01'
+  },
+  {
     id: '1',
     name: '小红书文案生成器',
     description: '专业的小红书文案创作助手，帮你生成吸引人的种草文案，提升内容传播效果',
@@ -52,6 +64,11 @@ export default function Agents() {
   }, [searchText])
 
   const handleAgentClick = async (agent: Agent) => {
+    if (agent.id === 'rag') {
+      navigate('/agents/rag')
+      return
+    }
+
     try {
       // 先创建一个新的 chat 会话
       const { data } = await sessionApi.createChat(`与 ${agent.name} 的对话`)

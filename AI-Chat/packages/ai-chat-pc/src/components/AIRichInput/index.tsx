@@ -3,12 +3,13 @@ import {
   LinkOutlined,
   FireOutlined,
   SmileOutlined,
-  CloseOutlined
+  CloseOutlined,
+  StopOutlined
 } from '@ant-design/icons'
 import { Attachments, Prompts, Sender } from '@ant-design/x'
 import { Button, message, Spin, type GetRef } from 'antd'
 import React from 'react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import SparkMD5 from 'spark-md5'
 
 import {
@@ -21,7 +22,9 @@ import {
 import { sessionApi } from '@pc/apis/session'
 import { BASE_URL, DEFAULT_MESSAGE } from '@pc/constant'
 import { useChatStore, useConversationStore } from '@pc/store'
+import { chatLocalDB, type PendingMessageRecord } from '@pc/utils/chatLocalDB'
 import { isImageByExtension } from '@pc/utils/judgeImage'
+import { StreamChatClient, type StreamStatus } from '@pc/utils/streamChatClient'
 
 import type { PromptsProps } from '@ant-design/x'
 import type { RcFile } from 'antd/es/upload'
@@ -35,12 +38,6 @@ interface ChunkInfo {
   index: number
   chunk: Blob
 }
-type PromptItem = {
-  key: string
-  description: string
-  icon: React.ReactNode
-  disabled?: boolean
-}
 
 const AIRichInput = () => {
   const [isLoading, setIsLoading] = useState(false)
@@ -52,15 +49,53 @@ const AIRichInput = () => {
   const senderRef = useRef<GetRef<typeof Sender>>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const idRef = useRef<string | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
+  const streamClientRef = useRef<StreamChatClient | null>(null)
   const uploadedChunksRef = useRef<number[]>([])
   const fileChunksRef = useRef<ChunkInfo[]>([])
   const fileIdRef = useRef<string | null>(null)
   const fileNameRef = useRef<string | null>(null)
   const filePathRef = useRef<string | null>(null)
   const [showPrompts, setShowPrompts] = useState(true)
-  const { messages, addMessage, addChunkMessage } = useChatStore()
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
+  const { messages, addMessage, addChunkMessage, mergeMessages, updateMessageStatus } =
+    useChatStore()
   const { selectedId, setSelectedId, addConversation } = useConversationStore()
+
+  useEffect(() => {
+    return () => {
+      streamClientRef.current?.close()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!selectedId) {
+      return
+    }
+
+    chatLocalDB.getMessages(selectedId).then((localMessages) => {
+      mergeMessages(selectedId, localMessages)
+    })
+  }, [mergeMessages, selectedId])
+
+  useEffect(() => {
+    const retryPendingMessages = async () => {
+      const retryMessages = await chatLocalDB.getRetryableMessages()
+
+      for (const item of retryMessages) {
+        await retryPendingMessage(item)
+      }
+    }
+
+    window.addEventListener('online', retryPendingMessages)
+
+    if (navigator.onLine) {
+      retryPendingMessages()
+    }
+
+    return () => {
+      window.removeEventListener('online', retryPendingMessages)
+    }
+  }, [updateMessageStatus])
 
   // 监听输入值变化
   const handleInputChange = (value: string) => {
@@ -319,65 +354,101 @@ const AIRichInput = () => {
 
   const sendMessage = async (
     chatId: string,
-    message: string,
+    text: string,
     // images?: string[],
-    fileId?: string
+    fileId?: string,
+    clientMessageId?: string
   ) => {
-    await sendChatMessage({
-      id: chatId,
-      message,
-      // imgUrl: images,
-      fileId
-    })
+    try {
+      await sendChatMessage({
+        id: chatId,
+        message: text,
+        // imgUrl: images,
+        fileId
+      })
+
+      if (clientMessageId) {
+        updateMessageStatus(chatId, clientMessageId, 'sent')
+        await chatLocalDB.markPendingStatus(clientMessageId, 'sent')
+        await chatLocalDB.markMessageStatus(clientMessageId, 'sent')
+      }
+    } catch (error) {
+      if (clientMessageId) {
+        updateMessageStatus(chatId, clientMessageId, 'failed')
+        await chatLocalDB.markPendingStatus(clientMessageId, 'failed')
+        await chatLocalDB.markMessageStatus(clientMessageId, 'failed')
+      }
+
+      streamClientRef.current?.close()
+      setInputLoading(false)
+      setStreamStatus('error')
+      message.error('消息发送失败，网络恢复后会自动重试')
+      throw error
+    }
     // .finally(() => {
     //   setSelectedImages([])
     // })
+  }
+
+  const retryPendingMessage = async (pendingMessage: PendingMessageRecord) => {
+    if (!navigator.onLine) {
+      return
+    }
+
+    try {
+      await sendChatMessage({
+        id: pendingMessage.chatId,
+        message: pendingMessage.content,
+        fileId: pendingMessage.fileId
+      })
+      updateMessageStatus(pendingMessage.chatId, pendingMessage.clientMessageId, 'sent')
+      await chatLocalDB.markPendingStatus(pendingMessage.clientMessageId, 'sent')
+      await chatLocalDB.markMessageStatus(pendingMessage.clientMessageId, 'sent')
+    } catch {
+      updateMessageStatus(pendingMessage.chatId, pendingMessage.clientMessageId, 'failed')
+      await chatLocalDB.markPendingStatus(pendingMessage.clientMessageId, 'failed')
+      await chatLocalDB.markMessageStatus(pendingMessage.clientMessageId, 'failed')
+    }
   }
 
   const createSSEAndSendMessage = (
     chatId: string,
     message: string,
     // images?: string[],
-    fileId?: string
+    fileId?: string,
+    clientMessageId?: string
   ) => {
     // console.log('images', fileId, images)
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-    }
+    streamClientRef.current?.close()
+    streamClientRef.current = new StreamChatClient({
+      createConnection: createSSE,
+      flushInterval: 50,
+      onChunk: addChunkMessage,
+      onComplete: () => {
+        setInputLoading(false)
+      },
+      onError: (error) => {
+        console.error('SSE连接错误:', error)
+        setInputLoading(false)
+      },
+      onStatusChange: setStreamStatus
+    })
 
-    eventSourceRef.current = createSSE(chatId)
-    // eslint-disable-next-line unused-imports/no-unused-vars
-    let content = ''
-    eventSourceRef.current.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'chunk') {
-          content += data.content
-          addChunkMessage(data.content)
-        } else if (data.type === 'complete') {
-          content = data.content
-          setInputLoading(false)
-          content = ''
-        } else if (data.type === 'error') {
-          console.error('SSE连接错误:', data.error)
-        }
-      } catch (error) {
-        console.log('解析消息失败', error)
-      }
-    }
-
-    eventSourceRef.current.onerror = (error) => {
-      console.error('SSE连接错误:', error)
-      eventSourceRef.current?.close()
-      eventSourceRef.current = null
-    }
+    streamClientRef.current.start(chatId)
 
     // sendMessage(chatId, message, images, fileId)
-    sendMessage(chatId, message, fileId)
+    sendMessage(chatId, message, fileId, clientMessageId).catch(() => undefined)
+  }
+
+  const stopGeneration = () => {
+    streamClientRef.current?.abort()
+    setInputLoading(false)
   }
 
   const submitMessage = async (message: string) => {
     setInputLoading(true)
+    const textMessage = message.trim()
+    let clientMessageId: string | undefined
     // 新建会话，并将id与会话关联
     if (!selectedId) {
       const { data } = await sessionApi.createChat(message || '图片消息')
@@ -417,19 +488,34 @@ const AIRichInput = () => {
       }
     }
 
-    if (message)
-      if (message.trim()) {
-        // 添加文本内容
-        addMessage({
-          content: [
-            {
-              type: 'text',
-              content: message
-            }
-          ],
-          role: 'user'
-        })
+    if (textMessage && (idRef.current || selectedId)) {
+      const targetChatId = idRef.current || (selectedId as string)
+      clientMessageId = chatLocalDB.createClientMessageId()
+      const createdAt = Date.now()
+      const userMessage = {
+        id: clientMessageId,
+        clientMessageId,
+        sendStatus: 'pending' as const,
+        createdAt,
+        content: [
+          {
+            type: 'text' as const,
+            content: textMessage
+          }
+        ],
+        role: 'user' as const
       }
+
+      addMessage(userMessage, targetChatId)
+      await chatLocalDB.saveMessage(targetChatId, userMessage)
+      await chatLocalDB.savePendingMessage({
+        clientMessageId,
+        chatId: targetChatId,
+        content: textMessage,
+        fileId: fileIdRef.current ? fileIdRef.current : undefined,
+        createdAt
+      })
+    }
 
     // console.log('selectedImages', selectedImages)
     // 添加图片内容
@@ -451,9 +537,10 @@ const AIRichInput = () => {
       // 建立sse连接，发送消息请求,并展示模型回复
       createSSEAndSendMessage(
         idRef.current || (selectedId as string),
-        message,
+        textMessage,
         // selectedImages.length > 0 ? selectedImages : undefined,
-        fileIdRef.current ? fileIdRef.current : undefined
+        fileIdRef.current ? fileIdRef.current : undefined,
+        clientMessageId
       )
     }
 
@@ -593,6 +680,14 @@ const AIRichInput = () => {
           loading={inputLoading}
           onSubmit={(message) => submitMessage(message)}
         />
+        {inputLoading && (
+          <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+            <span>生成状态：{streamStatus}</span>
+            <Button size="small" icon={<StopOutlined />} onClick={stopGeneration}>
+              停止生成
+            </Button>
+          </div>
+        )}
       </div>
     </React.Fragment>
   )
