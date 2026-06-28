@@ -27,6 +27,7 @@ import { isImageByExtension } from '@pc/utils/judgeImage'
 import { StreamChatClient, type StreamStatus } from '@pc/utils/streamChatClient'
 
 import type { PromptsProps } from '@ant-design/x'
+import type { UploadFile } from 'antd'
 import type { RcFile } from 'antd/es/upload'
 
 // 切片的大小 - 使用2MB分片大小以提高上传效率
@@ -45,6 +46,7 @@ const AIRichInput = () => {
   const [open, setOpen] = useState(false)
   const [hasInput, setHasInput] = useState(false)
   const [inputValue, setInputValue] = useState('')
+  const [attachmentItems, setAttachmentItems] = useState<UploadFile[]>([])
   const attachmentsRef = useRef<GetRef<typeof Attachments>>(null)
   const senderRef = useRef<GetRef<typeof Sender>>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -101,6 +103,16 @@ const AIRichInput = () => {
   const handleInputChange = (value: string) => {
     setInputValue(value)
     setHasInput(!!value.trim())
+  }
+
+  const resetAttachmentState = () => {
+    setAttachmentItems([])
+    setOpen(false)
+    fileIdRef.current = null
+    fileNameRef.current = null
+    filePathRef.current = null
+    uploadedChunksRef.current = []
+    fileChunksRef.current = []
   }
   // const [selectedImages, setSelectedImages] = useState<string[]>([])
 
@@ -347,8 +359,7 @@ const AIRichInput = () => {
       abortControllerRef.current = null
     }
     setIsLoading(false)
-    uploadedChunksRef.current = []
-    fileChunksRef.current = []
+    resetAttachmentState()
     message.info('文件上传已取消')
   }
 
@@ -446,8 +457,19 @@ const AIRichInput = () => {
   }
 
   const submitMessage = async (message: string) => {
+    if (inputLoading) {
+      return
+    }
+
     setInputLoading(true)
-    const textMessage = message.trim()
+    const hasAttachment = !!fileIdRef.current
+    const textMessage = message.trim() || (hasAttachment ? '请分析这个附件' : '')
+
+    if (!textMessage && !hasAttachment) {
+      setInputLoading(false)
+      return
+    }
+
     let clientMessageId: string | undefined
     // 新建会话，并将id与会话关联
     if (!selectedId) {
@@ -547,6 +569,7 @@ const AIRichInput = () => {
     // 重置输入状态和清空输入框
     setHasInput(false)
     setInputValue('')
+    resetAttachmentState()
   }
 
   const senderHeader = (
@@ -575,6 +598,8 @@ const AIRichInput = () => {
         }>
         <Attachments
           ref={attachmentsRef}
+          items={attachmentItems}
+          onChange={({ fileList }) => setAttachmentItems(fileList)}
           styles={{
             placeholder: { backgroundColor: 'transparent' }
           }}
@@ -675,7 +700,7 @@ const AIRichInput = () => {
             }
             setOpen(true)
           }}
-          submitType="shiftEnter"
+          submitType="enter"
           placeholder="请输入您的问题"
           loading={inputLoading}
           onSubmit={(message) => submitMessage(message)}

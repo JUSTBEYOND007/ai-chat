@@ -22,6 +22,7 @@ export interface ChatStoreProps {
   messages: ChatMessageProps
   addMessage: (message: MessageProps, chatId?: string) => void
   addChunkMessage: (chunk: string) => void
+  setMessages: (chatId: string, messages: MessageProps[]) => void
   mergeMessages: (chatId: string, messages: MessageProps[]) => void
   updateMessageStatus: (
     chatId: string,
@@ -96,6 +97,17 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
 
       const newMessages = new Map(state.messages)
       newMessages.set(selectedId, currentMessages)
+
+      return {
+        messages: newMessages
+      }
+    })
+  },
+
+  setMessages: (chatId, messages) => {
+    set((state) => {
+      const newMessages = new Map(state.messages)
+      newMessages.set(chatId, messages)
 
       return {
         messages: newMessages

@@ -19,4 +19,5 @@ export interface UseMessageHeightReturn {
   getItemSize: (index: number) => number
   setItemSize: (index: number, size: number) => void
   resetHeights: () => void
+  heightsVersion: number
 }

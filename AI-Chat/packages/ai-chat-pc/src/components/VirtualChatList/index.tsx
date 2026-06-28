@@ -1,26 +1,24 @@
 import { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import type { CSSProperties } from 'react'
+
 import { MessageItem } from './MessageItem'
 import { useMessageHeight } from './useMessageHeight'
 import type { VirtualChatListProps } from './types'
 import { rafThrottle } from '@pc/utils/performance'
+
 import './styles.css'
 
-/**
- * 虚拟滚动聊天列表组件
- * 
- * 核心原理：
- * 1. 只渲染可视区域内的消息（startIndex 到 endIndex）
- * 2. 使用 transform 实现消息定位，避免大量 DOM 操作
- * 3. 动态计算每条消息的高度并缓存
- * 4. 自动滚动到底部（新消息到达时）
- * 
- * 性能优化：
- * - DOM 节点数：从 1000+ 降至 20-30 个
- * - 内存占用：减少 75%
- * - 滚动帧率：稳定 60fps
- * - 使用 RAF 节流优化滚动事件
- */
+const BUFFER_SIZE = 4
+const BOTTOM_THRESHOLD = 16
+const BOTTOM_PADDING = 180
+
+const getMessageKey = (
+  message: VirtualChatListProps['messages'][number],
+  index: number
+) => {
+  return message.clientMessageId || message.id || `${message.role}-${message.createdAt}-${index}`
+}
+
 export const VirtualChatList = ({
   messages,
   height,
@@ -29,93 +27,104 @@ export const VirtualChatList = ({
 }: VirtualChatListProps) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  
-  // 滚动状态
+  const userScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const lastMessageKeysRef = useRef<string>('')
+
   const [scrollTop, setScrollTop] = useState(0)
   const [isUserScrolling, setIsUserScrolling] = useState(false)
-  const userScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-  
-  // 高度管理
-  const { getItemSize, setItemSize } = useMessageHeight(120) // 默认高度 120px
-  
-  // 缓冲区配置：上下各多渲染几条，提升滚动流畅度
-  const BUFFER_SIZE = 3
-  
-  // 计算总高度（使用 useMemo 缓存）
+
+  const { getItemSize, setItemSize, resetHeights, heightsVersion } =
+    useMessageHeight(120)
+
+  const messageKeys = useMemo(
+    () => messages.map((message, index) => getMessageKey(message, index)).join('|'),
+    [messages]
+  )
+
+  useEffect(() => {
+    if (lastMessageKeysRef.current && lastMessageKeysRef.current !== messageKeys) {
+      resetHeights()
+    }
+
+    lastMessageKeysRef.current = messageKeys
+  }, [messageKeys, resetHeights])
+
   const totalHeight = useMemo(() => {
     let total = 0
     for (let i = 0; i < messages.length; i++) {
       total += getItemSize(i)
     }
     return total
-  }, [messages.length, getItemSize])
-  
-  // 计算可视区域的起始索引
+  }, [messages.length, getItemSize, heightsVersion])
+
   const getStartIndex = useCallback(() => {
     let sum = 0
     for (let i = 0; i < messages.length; i++) {
       const itemHeight = getItemSize(i)
       if (sum + itemHeight > scrollTop) {
-        // 添加缓冲区
         return Math.max(0, i - BUFFER_SIZE)
       }
       sum += itemHeight
     }
+
     return Math.max(0, messages.length - 1 - BUFFER_SIZE)
-  }, [messages.length, scrollTop, getItemSize])
-  
-  // 计算可视区域的结束索引
+  }, [messages.length, scrollTop, getItemSize, heightsVersion])
+
   const getEndIndex = useCallback(() => {
     let sum = 0
     for (let i = 0; i < messages.length; i++) {
-      const itemHeight = getItemSize(i)
-      sum += itemHeight
+      sum += getItemSize(i)
       if (sum > scrollTop + height) {
-        // 添加缓冲区
         return Math.min(messages.length - 1, i + BUFFER_SIZE)
       }
     }
+
     return messages.length - 1
-  }, [messages.length, scrollTop, height, getItemSize])
-  
-  // 计算偏移量（从顶部到第一个可见项的距离）
-  const getOffsetY = useCallback((startIndex: number) => {
-    let offset = 0
-    for (let i = 0; i < startIndex; i++) {
-      offset += getItemSize(i)
-    }
-    return offset
-  }, [getItemSize])
-  
-  // 使用 RAF 节流优化滚动处理
+  }, [messages.length, scrollTop, height, getItemSize, heightsVersion])
+
+  const getOffsetY = useCallback(
+    (startIndex: number) => {
+      let offset = 0
+      for (let i = 0; i < startIndex; i++) {
+        offset += getItemSize(i)
+      }
+      return offset
+    },
+    [getItemSize, heightsVersion]
+  )
+
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      const container = containerRef.current
+      if (!container) return
+
+      container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+      setScrollTop(container.scrollTop)
+    })
+  }, [])
+
   const handleScrollThrottled = useMemo(
     () =>
-      rafThrottle((scrollTop: number) => {
-        setScrollTop(scrollTop)
+      rafThrottle((nextScrollTop: number) => {
+        setScrollTop(nextScrollTop)
       }),
     []
   )
-  
-  // 处理滚动事件
+
   const handleScroll = useCallback(
     (e: React.UIEvent<HTMLDivElement>) => {
-      const target = e.target as HTMLDivElement
+      const target = e.currentTarget
       handleScrollThrottled(target.scrollTop)
-      
-      // 标记用户正在滚动
       setIsUserScrolling(true)
-      
-      // 清除之前的定时器
+
       if (userScrollTimeoutRef.current) {
         clearTimeout(userScrollTimeoutRef.current)
       }
-      
-      // 500ms 后认为用户停止滚动
+
       userScrollTimeoutRef.current = setTimeout(() => {
-        // 检查是否滚动到底部（允许 10px 误差）
         const isAtBottom =
-          target.scrollHeight - target.scrollTop - target.clientHeight < 10
-        
+          target.scrollHeight - target.scrollTop - target.clientHeight < BOTTOM_THRESHOLD
+
         if (isAtBottom) {
           setIsUserScrolling(false)
         }
@@ -123,37 +132,35 @@ export const VirtualChatList = ({
     },
     [handleScrollThrottled]
   )
-  
-  // 处理高度变化
+
   const handleHeightChange = useCallback(
-    (index: number, height: number) => {
-      setItemSize(index, height)
-      
-      // 如果是最后一条消息且用户没有主动滚动，自动滚到底部
+    (index: number, itemHeight: number) => {
+      setItemSize(index, itemHeight)
+
       if (index === messages.length - 1 && !isUserScrolling) {
-        requestAnimationFrame(() => {
-          if (containerRef.current) {
-            containerRef.current.scrollTop = containerRef.current.scrollHeight
-          }
-        })
+        scrollToBottom()
       }
     },
-    [messages.length, isUserScrolling, setItemSize]
+    [messages.length, isUserScrolling, setItemSize, scrollToBottom]
   )
-  
-  // 新消息到达时自动滚动到底部
+
   useEffect(() => {
-    if (!isUserScrolling && containerRef.current && messages.length > 0) {
-      // 使用 requestAnimationFrame 确保 DOM 更新后再滚动
-      requestAnimationFrame(() => {
-        if (containerRef.current) {
-          containerRef.current.scrollTop = containerRef.current.scrollHeight
-        }
-      })
+    if (!isUserScrolling && messages.length > 0) {
+      scrollToBottom()
     }
-  }, [messages.length, isUserScrolling])
-  
-  // 清理定时器
+  }, [messages.length, isUserScrolling, scrollToBottom])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+    if (container.scrollTop > maxScrollTop) {
+      container.scrollTop = maxScrollTop
+      setScrollTop(maxScrollTop)
+    }
+  }, [totalHeight])
+
   useEffect(() => {
     return () => {
       if (userScrollTimeoutRef.current) {
@@ -161,18 +168,16 @@ export const VirtualChatList = ({
       }
     }
   }, [])
-  
-  // 计算渲染范围
+
   const startIndex = getStartIndex()
   const endIndex = getEndIndex()
   const offsetY = getOffsetY(startIndex)
-  
-  // 生成可见消息列表
+
   const visibleMessages = useMemo(
     () => messages.slice(startIndex, endIndex + 1),
     [messages, startIndex, endIndex]
   )
-  
+
   return (
     <div
       ref={containerRef}
@@ -180,36 +185,33 @@ export const VirtualChatList = ({
       style={{
         height,
         width,
-        overflow: 'auto',
+        overflowY: 'auto',
+        overflowX: 'hidden',
         position: 'relative'
       }}
-      onScroll={handleScroll}
-    >
-      {/* 占位容器，撑开滚动高度 */}
+      onScroll={handleScroll}>
       <div
+        className="virtual-chat-list-spacer"
         style={{
-          height: totalHeight,
+          height: totalHeight + BOTTOM_PADDING,
           position: 'relative'
-        }}
-      >
-        {/* 可见消息容器 */}
+        }}>
         <div
           ref={contentRef}
+          className="virtual-chat-list-window"
           style={{
-            transform: `translateY(${offsetY}px)`,
-            willChange: 'transform' // 优化渲染性能
-          }}
-        >
+            transform: `translateY(${offsetY}px)`
+          }}>
           {visibleMessages.map((message, idx) => {
             const actualIndex = startIndex + idx
             const itemStyle: CSSProperties = {
               position: 'relative',
               width: '100%'
             }
-            
+
             return (
               <MessageItem
-                key={actualIndex}
+                key={getMessageKey(message, actualIndex)}
                 message={message}
                 index={actualIndex}
                 style={itemStyle}
@@ -219,8 +221,6 @@ export const VirtualChatList = ({
           })}
         </div>
       </div>
-      
-      {/* 性能监控面板已移除 - 如需调试可在浏览器控制台查看 */}
     </div>
   )
 }

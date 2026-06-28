@@ -32,15 +32,24 @@ export const MessageItem = memo<MessageItemProps>(
       },
       user: {
         placement: 'end',
-        avatar: { icon: <UserOutlined />, style: { background: '#87d068' } }
+        avatar: { icon: <UserOutlined />, style: { background: '#87d068' } },
+        style: {
+          maxWidth: '100%'
+        }
       },
       file: {
         placement: 'end',
-        variant: 'borderless'
+        variant: 'borderless',
+        style: {
+          maxWidth: '100%'
+        }
       },
       image: {
         placement: 'end',
-        variant: 'borderless'
+        variant: 'borderless',
+        style: {
+          maxWidth: '100%'
+        }
       }
     }
 
@@ -65,7 +74,7 @@ export const MessageItem = memo<MessageItemProps>(
         // 使用 ResizeObserver 监听高度变化
         resizeObserverRef.current = new ResizeObserver((entries) => {
           for (const entry of entries) {
-            const height = entry.contentRect.height
+            const height = entry.target.getBoundingClientRect().height
             if (height > 0) {
               // 报告高度变化
               onHeightChange(index, height)
@@ -92,7 +101,10 @@ export const MessageItem = memo<MessageItemProps>(
           : ''
 
     return (
-      <div ref={itemRef} style={style}>
+      <div
+        ref={itemRef}
+        className={`virtual-chat-list-item virtual-chat-list-item-${message.role}`}
+        style={style}>
         <Bubble
           placement={roleConfig?.placement}
           avatar={roleConfig?.avatar}

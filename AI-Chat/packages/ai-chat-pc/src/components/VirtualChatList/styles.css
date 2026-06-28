@@ -1,24 +1,79 @@
-/* 虚拟滚动列表样式 */
 .virtual-chat-list {
-  /* 隐藏滚动条但保持滚动功能 */
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* IE 10+ */
-  
-  /* 平滑滚动 */
-  scroll-behavior: smooth;
-  
-  /* 添加内边距 */
-  padding: 16px;
-  padding-bottom: 25%;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-behavior: auto;
+  padding: 0 40px;
 }
 
 .virtual-chat-list::-webkit-scrollbar {
-  display: none; /* Chrome Safari */
+  display: none;
 }
 
-/* 优化渲染性能 - 使用 GPU 加速 */
-.virtual-chat-list > div {
+.virtual-chat-list-item {
+  width: 100%;
+  padding-bottom: 22px;
+}
+
+.virtual-chat-list-item:last-child {
+  padding-bottom: 0;
+}
+
+.virtual-chat-list-spacer {
+  padding-top: 24px;
+}
+
+.virtual-chat-list-window {
   will-change: transform;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
+}
+
+.virtual-chat-list-item-user,
+.virtual-chat-list-item-file,
+.virtual-chat-list-item-image {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.virtual-chat-list-item .ant-bubble {
+  max-width: min(76%, 820px);
+}
+
+.virtual-chat-list-item-system .ant-bubble {
+  max-width: min(84%, 980px);
+}
+
+.virtual-chat-list-item-user .ant-bubble-content {
+  background: #f1f3f5;
+  border-radius: 8px;
+  line-height: 1.6;
+  padding: 12px 16px;
+}
+
+.virtual-chat-list-item-file .ant-bubble,
+.virtual-chat-list-item-image .ant-bubble {
+  max-width: min(76%, 520px);
+}
+
+.virtual-chat-list-item-file .ant-bubble-content,
+.virtual-chat-list-item-image .ant-bubble-content {
+  background: transparent;
+  padding: 0;
+}
+
+.virtual-chat-list-item-image .message-image-container {
+  margin: 0;
+}
+
+@media (max-width: 768px) {
+  .virtual-chat-list {
+    padding: 0 16px;
+  }
+
+  .virtual-chat-list-spacer {
+    padding-top: 16px;
+  }
+
+  .virtual-chat-list-item .ant-bubble,
+  .virtual-chat-list-item-system .ant-bubble {
+    max-width: 92%;
+  }
 }

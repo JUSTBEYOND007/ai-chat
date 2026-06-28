@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { BASE_URL } from 'src/constant';
 import { isImageByExtension } from 'src/util';
 
@@ -9,48 +10,80 @@ import { isImageByExtension } from 'src/util';
 export class AiService {
   private openai: OpenAI;
   private defaultMessage = 'you are a helpful assistant';
+  private textModel: string;
+  private visionModel: string;
 
-  constructor() {
+  constructor(private readonly configService: ConfigService) {
     this.openai = new OpenAI({
-      // 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：apiKey: "sk-xxx",
-      apiKey: 'sk-839c413f949049918615290813173f2f',
-      baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      apiKey: this.configService.get<string>('DASHSCOPE_API_KEY'),
+      baseURL:
+        this.configService.get<string>('DASHSCOPE_BASE_URL') ??
+        'https://dashscope.aliyuncs.com/compatible-mode/v1',
     });
+    this.textModel =
+      this.configService.get<string>('DASHSCOPE_TEXT_MODEL') ?? 'qwen-long';
+    this.visionModel =
+      this.configService.get<string>('DASHSCOPE_VISION_MODEL') ??
+      'qwen-vl-plus';
   }
 
-  async getAiWithFile(filePath: string) {
-    // 将URL路径转换为本地文件系统路径
+  private getLocalFilePath(filePath: string) {
     let localFilePath = filePath;
 
     if (filePath.startsWith(BASE_URL)) {
-      // 如果是完整URL，移除BASE_URL部分
       localFilePath = filePath.replace(BASE_URL, '');
     }
 
+    if (localFilePath.includes('/uploads/')) {
+      localFilePath = localFilePath.slice(localFilePath.indexOf('/uploads/'));
+    }
+
     if (localFilePath.startsWith('/uploads/')) {
-      // 如果是相对URL路径，转换为绝对本地路径
       localFilePath = path.join(
         process.cwd(),
         localFilePath.replace(/^\//, ''),
       );
     } else if (localFilePath.startsWith('uploads/')) {
-      // 如果已经移除了前导斜杠，直接拼接
       localFilePath = path.join(process.cwd(), localFilePath);
     }
 
-    // 确保路径使用正确的分隔符
-    localFilePath = path.normalize(localFilePath);
+    return path.normalize(localFilePath);
+  }
 
-    console.log('转换后的本地路径:', localFilePath);
+  private getImageMimeType(filePath: string) {
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.bmp': 'image/bmp',
+    };
+
+    return mimeTypes[ext] ?? 'image/jpeg';
+  }
+
+  private getImageDataUrl(filePath: string) {
+    const localFilePath = this.getLocalFilePath(filePath);
+    const imageBuffer = fs.readFileSync(localFilePath);
+    const mimeType = this.getImageMimeType(localFilePath);
+
+    return `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+  }
+
+  async getAiWithFile(filePath: string) {
+    const localFilePath = this.getLocalFilePath(filePath);
+
+    console.log('Converted local file path:', localFilePath);
 
     const fileObject = await this.openai.files.create({
       file: fs.createReadStream(localFilePath),
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      // DashScope accepts OpenAI-compatible file extraction purpose.
       purpose: 'file-extract' as any,
     });
 
-    const res = `fileid://${fileObject.id}`;
-    return res;
+    return `fileid://${fileObject.id}`;
   }
 
   async getAiWithMessage() {}
@@ -63,9 +96,6 @@ export class AiService {
       type: 'image_url',
       image_url: { url: imgUrl },
     };
-    // imgUrl.map((item) => {
-
-    // });
 
     const messageContent: {
       type: 'text';
@@ -80,20 +110,22 @@ export class AiService {
 
   async getMain(message: string, filePath: string, imgUrl?: string[]) {
     const isImage = isImageByExtension(filePath);
-    const model = isImage ? 'qwen-vl-plus' : 'qwen-long';
+    const model = isImage ? this.visionModel : this.textModel;
 
-    const content = filePath
-      ? await this.getAiWithFile(filePath)
-      : this.defaultMessage;
+    const content =
+      filePath && !isImage ? await this.getAiWithFile(filePath) : this.defaultMessage;
 
     const userContent = isImage
-      ? this.getAiWithImg(message, filePath)
+      ? this.getAiWithImg(
+          message || '请描述这张图片',
+          this.getImageDataUrl(filePath),
+        )
       : message;
 
     const completion = await this.openai.chat.completions.create({
-      model: model,
+      model,
       messages: [
-        { role: 'system', content: content },
+        { role: 'system', content },
         { role: 'user', content: userContent },
       ],
       stream: true,

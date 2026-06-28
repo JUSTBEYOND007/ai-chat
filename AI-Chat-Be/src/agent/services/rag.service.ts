@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
 import { MemoryVectorStore } from 'langchain/vectorstores/memory';
 import { Document } from '@langchain/core/documents';
@@ -46,7 +47,7 @@ export class RagService {
   private documents: KnowledgeDocument[] = [...KNOWLEDGE_DOCUMENTS];
   private useLocalFallback = false;
 
-  constructor() {
+  constructor(private readonly configService: ConfigService) {
     this.initializeService();
   }
 
@@ -54,20 +55,27 @@ export class RagService {
     try {
       // 初始化嵌入模型
       this.embeddings = new OpenAIEmbeddings({
-        openAIApiKey: 'sk-839c413f949049918615290813173f2f',
+        openAIApiKey: this.configService.get<string>('DASHSCOPE_API_KEY'),
         configuration: {
-          baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          baseURL:
+            this.configService.get<string>('DASHSCOPE_BASE_URL') ??
+            'https://dashscope.aliyuncs.com/compatible-mode/v1',
         },
-        modelName: 'text-embedding-v1',
+        modelName:
+          this.configService.get<string>('DASHSCOPE_EMBEDDING_MODEL') ??
+          'text-embedding-v1',
       });
 
       // 初始化LLM
       this.llm = new ChatOpenAI({
-        openAIApiKey: 'sk-839c413f949049918615290813173f2f',
+        openAIApiKey: this.configService.get<string>('DASHSCOPE_API_KEY'),
         configuration: {
-          baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+          baseURL:
+            this.configService.get<string>('DASHSCOPE_BASE_URL') ??
+            'https://dashscope.aliyuncs.com/compatible-mode/v1',
         },
-        modelName: 'qwen-long',
+        modelName:
+          this.configService.get<string>('DASHSCOPE_RAG_MODEL') ?? 'qwen-long',
         temperature: 0.1,
       });
 

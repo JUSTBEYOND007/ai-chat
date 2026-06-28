@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react'
+import { useRef, useCallback, useState } from 'react'
 import type { UseMessageHeightReturn } from './types'
 
 /**
@@ -10,6 +10,7 @@ export const useMessageHeight = (
 ): UseMessageHeightReturn => {
   // 使用 Map 存储每条消息的高度
   const heightCache = useRef<Map<number, number>>(new Map())
+  const [heightsVersion, setHeightsVersion] = useState(0)
 
   /**
    * 获取指定索引消息的高度
@@ -30,6 +31,7 @@ export const useMessageHeight = (
     // 只有高度变化时才更新，避免不必要的重新计算
     if (currentHeight !== size) {
       heightCache.current.set(index, size)
+      setHeightsVersion((version) => version + 1)
     }
   }, [])
 
@@ -38,11 +40,13 @@ export const useMessageHeight = (
    */
   const resetHeights = useCallback(() => {
     heightCache.current.clear()
+    setHeightsVersion((version) => version + 1)
   }, [])
 
   return {
     getItemSize,
     setItemSize,
-    resetHeights
+    resetHeights,
+    heightsVersion
   }
 }
