@@ -32,7 +32,7 @@ export class FileEntity {
   isCanceled: boolean;
 
   @Column({
-    length: 256,
+    type: 'uuid',
     nullable: true,
   })
   chatId: string;

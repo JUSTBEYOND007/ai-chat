@@ -3,7 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { MysqlConnectionOptions } from 'typeorm/driver/mysql/MysqlConnectionOptions';
+import { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 import { UsersModule } from './users/users.module';
 import { JwtModule } from '@nestjs/jwt';
 
@@ -36,10 +36,10 @@ import { AgentModule } from './agent/agent.module';
       envFilePath: 'src/.env',
     }),
     TypeOrmModule.forRootAsync({
-      useFactory: (configService: ConfigService): MysqlConnectionOptions => ({
-        type: 'mysql',
+      useFactory: (configService: ConfigService): PostgresConnectionOptions => ({
+        type: 'postgres',
         host: configService.get('DB_HOST'),
-        port: configService.get('DB_PORT'),
+        port: Number(configService.get('DB_PORT')),
         username: configService.get('DB_USERNAME'),
         password: configService.get('DB_PASSWORD'),
         database: configService.get('DB_DATABASE'),
