@@ -1,29 +1,26 @@
-import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-// 在文件顶部添加
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { ChatOpenAI } from '@langchain/openai';
 import { Runnable } from '@langchain/core/runnables';
-
-import { AgentType } from './entities/agent.entity';
-import { GenerateContentDto } from './dto/create-agent.dto';
 import { ChainValues } from '@langchain/core/utils/types';
+import { GenerateContentDto } from './dto/create-agent.dto';
+import { AgentType } from './entities/agent.entity';
 import { MbtiService } from './services/mbti.service';
+import { KnowledgeService } from 'src/knowledge/knowledge.service';
 
 @Injectable()
 export class AgentService {
-  private llm: ChatOpenAI;
-  // 修改类型定义为 Runnable 而不是 RunnableSequence
+  private readonly llm: ChatOpenAI;
   private poetryAgent: Runnable<{ input: string }, string>;
   private xiaohongshuAgent: Runnable<{ input: string }, string>;
-  private weatherAgent: Runnable<{ input: string }, ChainValues | string>;
 
   constructor(
     private readonly mbtiService: MbtiService,
     private readonly configService: ConfigService,
+    private readonly knowledgeService: KnowledgeService,
   ) {
-    // 初始化LangChain模型
     this.llm = new ChatOpenAI({
       openAIApiKey: this.configService.get<string>('DASHSCOPE_API_KEY'),
       configuration: {
@@ -39,77 +36,22 @@ export class AgentService {
     this.initializeAgents();
   }
 
-  private initializeAgents() {
-    // 古诗词生成助手
-    const poetryPrompt = PromptTemplate.fromTemplate(`
-你是一位精通中国古典诗词的文学大师，擅长创作各种体裁的古诗词。
-
-请根据用户的要求创作古诗词，要求：
-1. 严格遵循古诗词的格律和韵律
-2. 意境优美，用词典雅
-3. 符合传统诗词的意象和表达方式
-
-用户要求：{input}
-
-请创作一首符合要求的古诗词：
-`);
-
-    // 添加StringOutputParser来确保返回字符串类型
-    this.poetryAgent = poetryPrompt
-      .pipe(this.llm)
-      .pipe(new StringOutputParser());
-
-    // 小红书爆款文案生成助手
-    const xiaohongshuPrompt = PromptTemplate.fromTemplate(`
-你是一位专业的小红书内容创作专家，擅长创作吸引人的爆款文案。
-
-请根据用户的主题创作小红书文案，要求：
-1. 标题要有吸引力，使用数字、emoji、热门词汇
-2. 内容要有价值，实用性强
-3. 语言活泼有趣，贴近年轻人
-4. 适当使用话题标签
-5. 结构清晰，易于阅读
-6. 长度适中，不超过500字
-
-用户主题：{input}
-
-请创作一篇小红书爆款文案：
-`);
-
-    this.xiaohongshuAgent = xiaohongshuPrompt
-      .pipe(this.llm)
-      .pipe(new StringOutputParser());
-
-    const weatherPrompt = PromptTemplate.fromTemplate(`
-    你是一个专业的天气查询助手，能够根据用户的问题查询当前的天气情况。
-
-    用户问题：{input}
-
-    请查询当前天气情况：
-    `);
-    this.weatherAgent = weatherPrompt
-      .pipe(this.llm)
-      .pipe(new StringOutputParser());
-  }
-
-  // 生成内容的核心方法
   async generateContent(generateContentDto: GenerateContentDto): Promise<{
     success: boolean;
     data: {
-      content: string | ChainValues;
+      content: string | ChainValues | Record<string, any>;
       agentType: AgentType;
       prompt: string;
     };
   }> {
-    console.log('generateContentDto', generateContentDto);
     const { agentType, prompt, options } = generateContentDto;
 
     try {
-      let result: string | ChainValues;
+      let result: string | ChainValues | Record<string, any>;
 
       switch (agentType) {
         case AgentType.POETRY:
-          result = await this.generatePoetry(prompt, options);
+          result = await this.generatePoetry(prompt);
           break;
         case AgentType.XIAOHONGSHU:
           result = await this.generateXiaohongshu(prompt);
@@ -117,8 +59,11 @@ export class AgentService {
         case AgentType.MBTI:
           result = await this.generateMbti(prompt, options);
           break;
+        case AgentType.RAG:
+          result = await this.generateKnowledgeRag(prompt, options);
+          break;
         default:
-          throw new HttpException('不支持的Agent类型', HttpStatus.BAD_REQUEST);
+          throw new HttpException('不支持的 Agent 类型', HttpStatus.BAD_REQUEST);
       }
 
       return {
@@ -129,50 +74,20 @@ export class AgentService {
           prompt,
         },
       };
-    } catch (error: any) {
+    } catch (error) {
       throw new HttpException(
-        `生成内容失败: ${error}`,
+        `生成内容失败: ${error instanceof Error ? error.message : String(error)}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
   }
 
-  // 古诗词生成
-  private async generatePoetry(
-    prompt: string,
-    options?: Record<string, any>,
-  ): Promise<string> {
-    console.log(options, 'options>>');
-    // 使用invoke方法替代call方法
-    const result = await this.poetryAgent.invoke({ input: prompt });
-    return result;
-  }
-
-  // 小红书文案生成
-  private async generateXiaohongshu(prompt: string): Promise<string> {
-    // 使用invoke方法替代call方法
-    const result = await this.xiaohongshuAgent.invoke({ input: prompt });
-    return result;
-  }
-
-  // MBTI聊天生成
-  private async generateMbti(
-    prompt: string,
-    options?: Record<string, any>,
-  ): Promise<string> {
-    const sessionId = options?.sessionId || 'default';
-    const result = await this.mbtiService.chat(prompt, sessionId);
-    return result;
-  }
-
-  // 获取预设的Agent模板
   getAgentTemplates() {
     return [
       {
         name: '古诗词生成助手',
         type: AgentType.POETRY,
-        description:
-          '专业的古诗词创作助手，能够根据主题、情感、场景等要求创作各种体裁的古诗词',
+        description: '根据主题、情感、场景等要求创作古诗词。',
         examples: [
           '写一首关于春天的七言绝句',
           '创作一首思乡的五言律诗',
@@ -182,26 +97,102 @@ export class AgentService {
       {
         name: '小红书爆款文案助手',
         type: AgentType.XIAOHONGSHU,
+        description: '生成适合小红书风格的标题、正文和话题标签。',
+        examples: ['护肤品推荐文案', '美食探店分享', '旅行攻略分享'],
+      },
+      {
+        name: '知识库问答 Agent',
+        type: AgentType.RAG,
         description:
-          '专业的小红书内容创作助手，擅长创作吸引人的爆款文案和种草内容',
+          '调用 searchKnowledgeBase 工具检索 PostgreSQL + pgvector 知识库，并基于文档片段回答问题。',
         examples: [
-          '护肤品推荐文案',
-          '美食探店分享',
-          '穿搭搭配指南',
-          '旅行攻略分享',
+          '总结这份文档的核心内容',
+          '这份项目文档里提到了哪些技术栈？',
+          '根据知识库回答这个功能是如何实现的',
         ],
       },
       {
-        name: 'MBTI咨询师助手',
+        name: 'MBTI 咨询师助手',
         type: AgentType.MBTI,
-        description:
-          '专业的MBTI咨询师助手，根据用户的MBTI类型提供个性化的情感支持和建议',
+        description: '根据用户的 MBTI 类型提供个性化的情感支持和建议。',
         examples: [
-          '我是INFP，最近工作压力很大怎么办？',
-          '作为ENTJ，如何更好地与团队沟通？',
-          '我不知道我的MBTI类型，能帮我分析一下吗？',
+          '我是 INFP，最近工作压力很大怎么办？',
+          '作为 ENTJ，如何更好地与团队沟通？',
+          '我不知道我的 MBTI 类型，能帮我分析一下吗？',
         ],
       },
     ];
+  }
+
+  private initializeAgents() {
+    const poetryPrompt = PromptTemplate.fromTemplate(`
+你是一位精通中国古典诗词的文学助手。
+请根据用户要求创作古诗词，要求格律尽量严谨、意境优美、表达自然。
+
+用户要求：{input}
+`);
+
+    this.poetryAgent = poetryPrompt
+      .pipe(this.llm)
+      .pipe(new StringOutputParser());
+
+    const xiaohongshuPrompt = PromptTemplate.fromTemplate(`
+你是一位小红书内容创作助手。
+请根据用户主题生成标题、正文和话题标签，要求语言自然、有吸引力、结构清晰。
+
+用户主题：{input}
+`);
+
+    this.xiaohongshuAgent = xiaohongshuPrompt
+      .pipe(this.llm)
+      .pipe(new StringOutputParser());
+  }
+
+  private async generatePoetry(prompt: string): Promise<string> {
+    return await this.poetryAgent.invoke({ input: prompt });
+  }
+
+  private async generateXiaohongshu(prompt: string): Promise<string> {
+    return await this.xiaohongshuAgent.invoke({ input: prompt });
+  }
+
+  private async generateMbti(
+    prompt: string,
+    options?: Record<string, any>,
+  ): Promise<string> {
+    const sessionId = options?.sessionId || 'default';
+    return await this.mbtiService.chat(prompt, sessionId);
+  }
+
+  private async generateKnowledgeRag(
+    prompt: string,
+    options?: Record<string, any>,
+  ): Promise<Record<string, any>> {
+    const knowledgeBaseId = options?.knowledgeBaseId;
+    if (!knowledgeBaseId) {
+      throw new HttpException('缺少 knowledgeBaseId', HttpStatus.BAD_REQUEST);
+    }
+
+    const userId = Number(options?.userId || 1);
+    const topK = Number(options?.topK || 5);
+    const ragResult = await this.knowledgeService.query(
+      knowledgeBaseId,
+      { query: prompt, topK },
+      userId,
+    );
+
+    return {
+      ...ragResult,
+      toolCalls: [
+        {
+          name: 'searchKnowledgeBase',
+          input: {
+            knowledgeBaseId,
+            query: prompt,
+            topK,
+          },
+        },
+      ],
+    };
   }
 }

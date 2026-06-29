@@ -1,0 +1,70 @@
+import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
+import { Request } from 'express';
+import { RequireLogin } from 'src/custom.decorator';
+import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
+import { IndexDocumentDto } from './dto/index-document.dto';
+import { RagQueryDto } from './dto/rag-query.dto';
+import { KnowledgeService } from './knowledge.service';
+
+@Controller('knowledge-bases')
+@RequireLogin()
+export class KnowledgeController {
+  constructor(private readonly knowledgeService: KnowledgeService) {}
+
+  @Post()
+  createKnowledgeBase(
+    @Body() createKnowledgeBaseDto: CreateKnowledgeBaseDto,
+    @Req() request: Request,
+  ) {
+    return this.knowledgeService.createKnowledgeBase(
+      createKnowledgeBaseDto,
+      this.getUserId(request),
+    );
+  }
+
+  @Get()
+  getKnowledgeBases(@Req() request: Request) {
+    return this.knowledgeService.getKnowledgeBases(this.getUserId(request));
+  }
+
+  @Post(':id/documents')
+  indexDocument(
+    @Param('id') knowledgeBaseId: string,
+    @Body() indexDocumentDto: IndexDocumentDto,
+    @Req() request: Request,
+  ) {
+    return this.knowledgeService.indexDocument(
+      knowledgeBaseId,
+      indexDocumentDto,
+      this.getUserId(request),
+    );
+  }
+
+  @Get(':id/documents')
+  getDocuments(
+    @Param('id') knowledgeBaseId: string,
+    @Req() request: Request,
+  ) {
+    return this.knowledgeService.getDocuments(
+      knowledgeBaseId,
+      this.getUserId(request),
+    );
+  }
+
+  @Post(':id/query')
+  queryKnowledgeBase(
+    @Param('id') knowledgeBaseId: string,
+    @Body() ragQueryDto: RagQueryDto,
+    @Req() request: Request,
+  ) {
+    return this.knowledgeService.query(
+      knowledgeBaseId,
+      ragQueryDto,
+      this.getUserId(request),
+    );
+  }
+
+  private getUserId(request: Request): number {
+    return Number((request as Request & { user?: { userId?: number } }).user?.userId);
+  }
+}

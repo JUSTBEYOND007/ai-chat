@@ -18,6 +18,10 @@ import { FileModule } from './file/file.module';
 import { FileEntity } from './file/entities/file.entity';
 import { AiModule } from './ai/ai.module';
 import { AgentModule } from './agent/agent.module';
+import { KnowledgeModule } from './knowledge/knowledge.module';
+import { KnowledgeBase } from './knowledge/entities/knowledge-base.entity';
+import { KnowledgeDocument } from './knowledge/entities/knowledge-document.entity';
+import { KnowledgeChunk } from './knowledge/entities/knowledge-chunk.entity';
 // import { Agent } from './agent/entities/agent.entity';
 
 @Module({
@@ -44,7 +48,7 @@ import { AgentModule } from './agent/agent.module';
         password: configService.get('DB_PASSWORD'),
         database: configService.get('DB_DATABASE'),
         synchronize: true,
-        entities: [User, Chat, Message, FileEntity], // 添加Agent实体
+        entities: [User, Chat, Message, FileEntity, KnowledgeBase, KnowledgeDocument, KnowledgeChunk], // 添加Agent实体
       }),
       inject: [ConfigService],
     }),
@@ -55,6 +59,7 @@ import { AgentModule } from './agent/agent.module';
     FileModule,
     AiModule,
     AgentModule,
+    KnowledgeModule,
   ],
   controllers: [AppController],
   providers: [
