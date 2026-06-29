@@ -14,6 +14,52 @@ NestJS + PostgreSQL + pgvector + LangChain.js + RAG + Agent + SSE 流式输出
 智能文档问答助手：支持大文件上传、PDF/文本解析、向量入库、相似度检索、引用溯源、工具调用、多轮记忆和流式回答。
 ```
 
+## 当前进度快照（2026-06-29）
+
+当前代码主线已经完成第一版 PostgreSQL + pgvector 知识库 RAG 闭环，核心提交为：
+
+```text
+ced46c0 feat: add pgvector knowledge base rag
+```
+
+已经落地的能力：
+
+- 后端已切到 PostgreSQL，并通过 `pgvector/pgvector:pg16` 容器启用 `vector` 扩展。
+- 已新增 `knowledge` 模块，包含 `KnowledgeBase`、`KnowledgeDocument`、`KnowledgeChunk` 三类实体。
+- 已提供知识库接口：创建/列表、文档入库/列表、知识库查询。
+- 文档入库已支持 `uploads/` 目录下的 `.txt`、`.md`、`.pdf` 文件解析、chunk 切分、embedding 生成和 pgvector 写入。
+- RAG 查询已支持 query embedding、pgvector topK 检索、LLM 回答生成，并返回 `answer + sources`。
+- 已做基础安全收口：入库文件真实路径必须位于 `AI-Chat-Be/uploads/` 下，避免任意服务器文件读取；失败入库会清理已写入 chunk；检索只召回 `indexed` 文档。
+- 前端已新增 `/agents/rag` 知识库验证页，可创建知识库、填写已存在文件路径入库、查看文档状态、发起 Query 并展示 Answer / Cited Sources。
+- Agent 列表页已隐藏小红书/诗词入口，只保留知识库问答助手入口（当前为未提交工作区改动）。
+
+已验证：
+
+```text
+cd /home/strive/workspace/ai-Chat-all/AI-Chat-Be
+npx jest knowledge.service.spec.ts --runInBand   # 5 passed
+npx tsc --noEmit -p tsconfig.build.json          # passed
+```
+
+当前未完成/待处理：
+
+- 前端 `tsc` 仍失败，根因是 `src/utils/debugHelper.ts`、`src/utils/tokenDebug.ts` 调用了旧版 `useUserStore.login/logout/getTokenStatus`，但当前 `useUserStore` 没有这些方法。
+- 文档入库页面现在要求手动填写 `uploads/...` 路径，还没有和现有大文件上传 UI 打通。
+- RAG 目前是普通 HTTP 返回，还没有接入 SSE 流式输出和消息持久化。
+- Agent 工具调用当前只是 RAG 分支返回 `toolCalls` 记录，还不是完整 LangChain Tool/Agent 执行链。
+- `agent.entity.ts` 仍有大量重复注释，需要清理。
+
+## 下一步开发计划
+
+建议下一阶段先做“可验证体验收口”，再进入 SSE/Agent 深水区：
+
+1. 修复前端 TypeScript 阻塞：在 `useUserStore` 补齐 `login`、`logout`、`getTokenStatus`，或清理两个过期 debug 工具；推荐补齐 store 标准方法，避免调试工具和业务登录状态继续分叉。
+2. 提交当前前端入口整理：把 Agent 列表固定为只展示“知识库问答助手”，避免未完成的诗词/小红书入口干扰 RAG 验证。
+3. 做一次端到端手动验证：准备 `AI-Chat-Be/uploads/demo.md`，在 `/agents/rag` 创建知识库、Index、Query，记录成功截图和失败点。
+4. 打通上传联动：复用现有 file 模块上传/合并结果，让前端不再手写文件路径，而是上传成功后直接调用知识库入库接口。
+5. 补充删除/重建能力：支持删除知识库文档、重新入库同名文档，避免验证时只能不断新增脏数据。
+6. 进入第二阶段体验升级：把 RAG 问答接入 chat/SSE，保存 answer、sources、toolCalls，并支持刷新后查看历史。
+
 ## 当前基础
 
 后端已有能力：
@@ -39,21 +85,21 @@ NestJS + PostgreSQL + pgvector + LangChain.js + RAG + Agent + SSE 流式输出
 
 TODO：
 
-- [ ] 安装 PostgreSQL 驱动：`pg`。
+- [x] 安装 PostgreSQL 驱动：`pg`。
 - [ ] 保留或移除 `mysql2`：确认是否还需要 MySQL 兼容。
-- [ ] 修改 `app.module.ts` 的 TypeORM 类型：`mysql` -> `postgres`。
+- [x] 修改 `app.module.ts` 的 TypeORM 类型：`mysql` -> `postgres`。
 - [ ] 修改 `.env` 数据库配置：
   - `DB_HOST=localhost`
   - `DB_PORT=5432`
   - `DB_USERNAME=postgres`
   - `DB_PASSWORD=...`
   - `DB_DATABASE=ai_chat`
-- [ ] 修改 `docker-compose.yml`：
+- [x] 修改 `docker-compose.yml`：
   - 删除或暂停 `mysql` 服务。
   - 新增 `postgres` 服务。
   - 保留 `redis` 服务。
-- [ ] 新增 PostgreSQL 初始化 SQL，比如创建数据库、启用扩展。
-- [ ] 检查实体字段兼容性：
+- [x] 新增 PostgreSQL 初始化 SQL，比如创建数据库、启用扩展。
+- [x] 检查实体字段兼容性：
   - `User`
   - `Chat`
   - `Message`
@@ -81,15 +127,15 @@ TODO：
 
 TODO：
 
-- [ ] Docker 镜像改为支持 pgvector 的 PostgreSQL 镜像，例如 `pgvector/pgvector:pg16`。
-- [ ] 初始化 SQL 中启用扩展：
+- [x] Docker 镜像改为支持 pgvector 的 PostgreSQL 镜像，例如 `pgvector/pgvector:pg16`。
+- [x] 初始化 SQL 中启用扩展：
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-- [ ] 确认 DashScope embedding 模型输出维度。
-- [ ] 设计向量字段维度，例如：
+- [x] 确认 DashScope embedding 模型输出维度。
+- [x] 设计向量字段维度，例如：
 
 ```sql
 embedding vector(1536)
@@ -102,9 +148,9 @@ embedding vector(1536)
 
 验收标准：
 
-- [ ] PostgreSQL 容器启动后自动启用 `vector` 扩展。
-- [ ] 后端可以写入 embedding。
-- [ ] 后端可以按相似度检索 topK chunks。
+- [x] PostgreSQL 容器启动后自动启用 `vector` 扩展。
+- [x] 后端可以写入 embedding。
+- [x] 后端可以按相似度检索 topK chunks。
 
 风险点：
 
@@ -166,11 +212,11 @@ embedding vector(1536)
 
 TODO：
 
-- [ ] 新增 `knowledge` 或 `rag` 模块。
-- [ ] 新增上面三个实体。
-- [ ] 注册到 TypeORM entities。
-- [ ] 给 `knowledgeBaseId`、`documentId`、`userId` 加普通索引。
-- [ ] 给 `embedding` 加 pgvector 索引，后续可选：
+- [x] 新增 `knowledge` 或 `rag` 模块。
+- [x] 新增上面三个实体。
+- [x] 注册到 TypeORM entities。
+- [x] 给 `knowledgeBaseId`、`documentId`、`userId` 加普通索引。
+- [x] 给 `embedding` 加 pgvector 索引，后续可选：
 
 ```sql
 CREATE INDEX ON knowledge_chunk USING ivfflat (embedding vector_cosine_ops);
@@ -178,10 +224,10 @@ CREATE INDEX ON knowledge_chunk USING ivfflat (embedding vector_cosine_ops);
 
 验收标准：
 
-- [ ] 可以创建知识库。
-- [ ] 可以保存文档记录。
-- [ ] 可以保存 chunk 和 embedding。
-- [ ] 可以根据知识库查询文档列表。
+- [x] 可以创建知识库。
+- [x] 可以保存文档记录。
+- [x] 可以保存 chunk 和 embedding。
+- [x] 可以根据知识库查询文档列表。
 
 ## 阶段 4：文档解析入库
 
@@ -201,26 +247,26 @@ CREATE INDEX ON knowledge_chunk USING ivfflat (embedding vector_cosine_ops);
 
 TODO：
 
-- [ ] 新增接口：`POST /knowledge-bases`
-- [ ] 新增接口：`GET /knowledge-bases`
-- [ ] 新增接口：`POST /knowledge-bases/:id/documents`
-- [ ] 新增接口：`GET /knowledge-bases/:id/documents`
-- [ ] 支持 PDF 文本提取。
-- [ ] 支持 TXT/MD 直接读取。
-- [ ] 文档入库时维护状态：
+- [x] 新增接口：`POST /knowledge-bases`
+- [x] 新增接口：`GET /knowledge-bases`
+- [x] 新增接口：`POST /knowledge-bases/:id/documents`
+- [x] 新增接口：`GET /knowledge-bases/:id/documents`
+- [x] 支持 PDF 文本提取。
+- [x] 支持 TXT/MD 直接读取。
+- [x] 文档入库时维护状态：
   - `pending`
   - `parsing`
   - `indexed`
   - `failed`
-- [ ] 入库失败时保存 `errorMessage`。
+- [x] 入库失败时保存 `errorMessage`。
 - [ ] 限制文件大小和文件类型。
 
 验收标准：
 
 - [ ] 用户可以上传一份 PDF 并入库。
-- [ ] 数据库能看到 document 和 chunks。
-- [ ] 文档状态最终变为 `indexed`。
-- [ ] 失败时前端能看到失败原因。
+- [x] 数据库能看到 document 和 chunks。
+- [x] 文档状态最终变为 `indexed`。
+- [x] 失败时前端能看到失败原因。
 
 风险点：
 
@@ -266,18 +312,18 @@ POST /rag/query
 
 TODO：
 
-- [ ] 用户问题生成 query embedding。
-- [ ] 使用 pgvector 查询 topK chunks。
-- [ ] 拼接 RAG prompt。
-- [ ] 调用大模型生成回答。
-- [ ] 返回 `answer + sources`。
-- [ ] 当检索不到内容时，明确回答“知识库中没有找到相关信息”。
+- [x] 用户问题生成 query embedding。
+- [x] 使用 pgvector 查询 topK chunks。
+- [x] 拼接 RAG prompt。
+- [x] 调用大模型生成回答。
+- [x] 返回 `answer + sources`。
+- [x] 当检索不到内容时，明确回答“知识库中没有找到相关信息”。
 
 验收标准：
 
 - [ ] 能问一份 PDF 的内容。
-- [ ] 回答里能体现文档上下文。
-- [ ] 响应包含引用来源。
+- [x] 回答里能体现文档上下文。
+- [x] 响应包含引用来源。
 - [ ] 不相关问题不会强行编造答案。
 
 ## 阶段 6：RAG 流式回答
@@ -336,7 +382,7 @@ Agent 行为：
 TODO：
 
 - [ ] 整理 `agent.entity.ts`，删除重复注释，保留干净的 `AgentType` 和实体设计。
-- [ ] 在 `AgentService` 中支持 `AgentType.RAG`。
+- [x] 在 `AgentService` 中支持 `AgentType.RAG`。
 - [ ] 使用 LangChain Tool 封装知识库检索。
 - [ ] 加一个 calculator tool。
 - [ ] 给 Agent 增加多轮 sessionId。
@@ -383,7 +429,7 @@ TODO：
   - 查看入库状态
   - 删除文档
 - [ ] 对话页支持选择知识库。
-- [ ] RAG 回答显示引用来源。
+- [x] RAG 回答显示引用来源。
 - [ ] Agent 回答显示工具调用过程。
 - [ ] 流式输出时保留 Markdown 渲染和代码高亮。
 - [ ] 文档入库中显示 loading/progress。
@@ -435,11 +481,11 @@ TODO：
 
 如果我们希望最快看到成果，第一阶段只做这些：
 
-- [ ] PostgreSQL 替换 MySQL。
-- [ ] pgvector 能正常启用。
-- [ ] 新建知识库。
+- [x] PostgreSQL 替换 MySQL。
+- [x] pgvector 能正常启用。
+- [x] 新建知识库。
 - [ ] 上传 TXT/MD 文档入库。
-- [ ] 对知识库提问，返回答案和引用。
+- [x] 对知识库提问，返回答案和引用。
 
 这个版本完成后，就可以对外讲：
 

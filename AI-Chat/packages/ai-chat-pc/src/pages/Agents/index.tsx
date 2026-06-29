@@ -1,10 +1,7 @@
 import { RobotOutlined, TagOutlined } from '@ant-design/icons'
-import { Card, Row, Col, Tag, Button, Input, message } from 'antd'
+import { Card, Row, Col, Tag, Button, Input } from 'antd'
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-
-import { sessionApi } from '@pc/apis/session'
-import { useConversationStore } from '@pc/store'
 
 import type { Agent } from '@pc/types/agent'
 
@@ -23,35 +20,12 @@ const mockAgents: Agent[] = [
     prompt: '基于知识库内容回答用户问题，并展示引用来源。',
     createdAt: '2024-01-01',
     updatedAt: '2024-01-01'
-  },
-  {
-    id: '1',
-    name: '小红书文案生成器',
-    description: '专业的小红书文案创作助手，帮你生成吸引人的种草文案，提升内容传播效果',
-    avatar: '📝',
-    category: '内容创作',
-    tags: ['文案', '小红书', '营销'],
-    prompt: '你是一个专业的小红书文案创作助手...',
-    createdAt: '2024-01-01',
-    updatedAt: '2024-01-01'
-  },
-  {
-    id: '2',
-    name: '诗词生成器',
-    description: '古典诗词创作专家，能够创作各种风格的诗词作品，传承中华文化之美',
-    avatar: '🎭',
-    category: '文学创作',
-    tags: ['诗词', '古典文学', '创作'],
-    prompt: '你是一个古典诗词创作专家...',
-    createdAt: '2024-01-01',
-    updatedAt: '2024-01-01'
   }
 ]
 
 export default function Agents() {
   const [searchText, setSearchText] = useState('')
   const navigate = useNavigate()
-  const { setSelectedId, addConversation } = useConversationStore()
 
   const filteredAgents = useMemo(() => {
     if (!searchText) return mockAgents
@@ -63,26 +37,9 @@ export default function Agents() {
     )
   }, [searchText])
 
-  const handleAgentClick = async (agent: Agent) => {
+  const handleAgentClick = (agent: Agent) => {
     if (agent.id === 'rag') {
       navigate('/agents/rag')
-      return
-    }
-
-    try {
-      // 先创建一个新的 chat 会话
-      const { data } = await sessionApi.createChat(`与 ${agent.name} 的对话`)
-      const { id, title } = data
-
-      // 使用真正的 chatId（而不是 agent.id）
-      setSelectedId(id)
-      addConversation({ id, title })
-
-      // 跳转到对话页面，携带 agent.id 作为查询参数（用于后端识别使用的 Agent）
-      navigate(`/conversation/${id}?agent=${agent.id}`)
-    } catch (error) {
-      console.error('创建会话失败:', error)
-      message.error('创建会话失败，请重试')
     }
   }
 

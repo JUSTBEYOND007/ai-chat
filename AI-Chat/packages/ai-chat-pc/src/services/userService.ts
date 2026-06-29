@@ -12,15 +12,12 @@ export const userService = {
       const response = await authApi.login(params)
 
       if (response.code === 1) {
-        useUserStore.setState({
-          isAuthenticated: true,
-          user: {
+        useUserStore.getState().login(
+          {
             nickName: response.data.nickName
           },
-          token: response.data.token,
-          loading: false,
-          error: null
-        })
+          response.data.token
+        )
       } else {
         throw new Error(response.msg || '登录失败')
       }
@@ -80,11 +77,6 @@ export const userService = {
   },
 
   logout() {
-    useUserStore.setState({
-      isAuthenticated: false,
-      user: null,
-      token: null,
-      error: null
-    })
+    useUserStore.getState().logout()
   }
 }
