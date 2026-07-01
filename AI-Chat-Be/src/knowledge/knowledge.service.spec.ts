@@ -6,7 +6,10 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { KnowledgeBase } from './entities/knowledge-base.entity';
 import { KnowledgeChunk } from './entities/knowledge-chunk.entity';
-import { KnowledgeDocument } from './entities/knowledge-document.entity';
+import {
+  KnowledgeDocument,
+  KnowledgeDocumentStatus,
+} from './entities/knowledge-document.entity';
 import { KnowledgeService } from './knowledge.service';
 
 describe('KnowledgeService focused behavior', () => {
@@ -135,6 +138,57 @@ describe('KnowledgeService focused behavior', () => {
       (service as any).extractTextFromFile('C:/private/outside.md'),
     ).rejects.toThrow('文件路径非法');
     expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
+
+  it('saves uploaded files under uploads and indexes them with a safe relative path', async () => {
+    const mkdirSpy = jest
+      .spyOn(fs.promises, 'mkdir')
+      .mockResolvedValue(undefined as unknown as string);
+    const writeFileSpy = jest
+      .spyOn(fs.promises, 'writeFile')
+      .mockResolvedValue(undefined);
+    const indexSpy = jest.spyOn(service, 'indexDocument').mockResolvedValue({
+      documentId: 'doc-id',
+      status: KnowledgeDocumentStatus.INDEXED,
+      chunkCount: 1,
+    });
+    jest.spyOn(Date, 'now').mockReturnValue(1700000000000);
+    jest.spyOn(Math, 'random').mockReturnValue(0.123456);
+
+    const result = await service.indexUploadedDocument(
+      'kb-id',
+      {
+        originalname: '../demo.md',
+        mimetype: 'text/markdown',
+        buffer: Buffer.from('# demo'),
+      },
+      42,
+    );
+
+    expect(mkdirSpy).toHaveBeenCalledWith(path.resolve(process.cwd(), 'uploads'), {
+      recursive: true,
+    });
+    expect(writeFileSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/uploads[/\\].+-demo\.md$/),
+      Buffer.from('# demo'),
+    );
+    expect(indexSpy).toHaveBeenCalledWith(
+      'kb-id',
+      {
+        fileName: 'demo.md',
+        filePath: expect.stringMatching(/^uploads\/.+-demo\.md$/),
+        mimeType: 'text/markdown',
+      },
+      42,
+    );
+    expect(result).toEqual({
+      documentId: 'doc-id',
+      status: KnowledgeDocumentStatus.INDEXED,
+      chunkCount: 1,
+      fileName: 'demo.md',
+      filePath: expect.stringMatching(/^uploads\/.+-demo\.md$/),
+    });
   });
 
   it('retrieves chunks only from indexed documents', async () => {

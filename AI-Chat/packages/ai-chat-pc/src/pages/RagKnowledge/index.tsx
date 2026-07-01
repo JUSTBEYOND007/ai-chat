@@ -2,9 +2,10 @@ import {
   BookOutlined,
   DatabaseOutlined,
   FileSearchOutlined,
+  InboxOutlined,
   SendOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Card, Empty, Input, InputNumber, Select, Space, Spin, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Empty, Input, InputNumber, Select, Space, Spin, Tag, Typography, Upload } from 'antd'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { knowledgeApi } from '@pc/apis/knowledge'
@@ -12,6 +13,7 @@ import { knowledgeApi } from '@pc/apis/knowledge'
 import type { KnowledgeBase, KnowledgeDocument, KnowledgeQueryResponse } from '@pc/types/rag'
 
 const { Paragraph, Text, Title } = Typography
+const { Dragger } = Upload
 
 const statusColor: Record<string, string> = {
   pending: 'default',
@@ -41,6 +43,7 @@ export default function RagKnowledge() {
   const [loading, setLoading] = useState(false)
   const [initLoading, setInitLoading] = useState(false)
   const [indexing, setIndexing] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const selectedKnowledgeBaseIdRef = useRef<string>()
@@ -168,6 +171,32 @@ export default function RagKnowledge() {
     }
   }
 
+
+  const handleUploadAndIndexDocument = async (file: File) => {
+    if (!selectedKnowledgeBaseId) {
+      setError('Select a knowledge base before uploading a document.')
+      return false
+    }
+
+    const knowledgeBaseId = selectedKnowledgeBaseId
+    setUploading(true)
+    setError(null)
+
+    try {
+      await knowledgeApi.uploadAndIndexDocument(knowledgeBaseId, file)
+      if (selectedKnowledgeBaseIdRef.current === knowledgeBaseId) {
+        await loadDocuments(knowledgeBaseId)
+      }
+    } catch (err) {
+      console.error(err)
+      setError('Failed to upload and index the document. Please check file type, model config, or backend logs.')
+    } finally {
+      setUploading(false)
+    }
+
+    return false
+  }
+
   const handleAsk = async (nextQuery = query) => {
     if (!selectedKnowledgeBaseId) {
       setError('Select a knowledge base before querying.')
@@ -253,6 +282,24 @@ export default function RagKnowledge() {
 
         <Card title="Index Document">
           <Space direction="vertical" size="middle" className="w-full">
+            <Dragger
+              accept=".txt,.md,.markdown,.pdf"
+              maxCount={1}
+              showUploadList={false}
+              beforeUpload={handleUploadAndIndexDocument}
+              disabled={!selectedKnowledgeBaseId || uploading}
+              className="bg-white">
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined />
+              </p>
+              <p className="ant-upload-text">
+                {uploading ? 'Uploading and indexing document...' : 'Click or drag a TXT / Markdown / PDF file to index'}
+              </p>
+              <p className="ant-upload-hint">
+                The backend stores the file under uploads/ and indexes it into pgvector automatically.
+              </p>
+            </Dragger>
+
             <div className="grid gap-3 md:grid-cols-[1fr_1.4fr_1fr_auto]">
               <Input
                 value={fileName}
@@ -262,7 +309,7 @@ export default function RagKnowledge() {
               <Input
                 value={filePath}
                 onChange={(event) => setFilePath(event.target.value)}
-                placeholder="File path"
+                placeholder="File path, e.g. uploads/demo.md"
               />
               <Input
                 value={mimeType}
@@ -272,9 +319,9 @@ export default function RagKnowledge() {
               <Button
                 type="primary"
                 loading={indexing}
-                disabled={!selectedKnowledgeBaseId}
+                disabled={!selectedKnowledgeBaseId || uploading}
                 onClick={handleIndexDocument}>
-                Index
+                Index Path
               </Button>
             </div>
           </Space>

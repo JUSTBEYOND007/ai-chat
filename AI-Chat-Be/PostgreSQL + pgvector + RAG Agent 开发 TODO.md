@@ -14,24 +14,27 @@ NestJS + PostgreSQL + pgvector + LangChain.js + RAG + Agent + SSE 流式输出
 智能文档问答助手：支持大文件上传、PDF/文本解析、向量入库、相似度检索、引用溯源、工具调用、多轮记忆和流式回答。
 ```
 
-## 当前进度快照（2026-06-29）
+## 当前进度快照（2026-07-01）
 
-当前代码主线已经完成第一版 PostgreSQL + pgvector 知识库 RAG 闭环，核心提交为：
+当前代码主线已经完成两个关键能力闭环：
 
 ```text
 ced46c0 feat: add pgvector knowledge base rag
+29cfce5 feat: add ai stream recovery
 ```
 
 已经落地的能力：
 
-- 后端已切到 PostgreSQL，并通过 `pgvector/pgvector:pg16` 容器启用 `vector` 扩展。
+- 后端已经切换到 PostgreSQL，并通过 `pgvector/pgvector:pg16` 容器启用 `vector` 扩展。
 - 已新增 `knowledge` 模块，包含 `KnowledgeBase`、`KnowledgeDocument`、`KnowledgeChunk` 三类实体。
 - 已提供知识库接口：创建/列表、文档入库/列表、知识库查询。
 - 文档入库已支持 `uploads/` 目录下的 `.txt`、`.md`、`.pdf` 文件解析、chunk 切分、embedding 生成和 pgvector 写入。
 - RAG 查询已支持 query embedding、pgvector topK 检索、LLM 回答生成，并返回 `answer + sources`。
 - 已做基础安全收口：入库文件真实路径必须位于 `AI-Chat-Be/uploads/` 下，避免任意服务器文件读取；失败入库会清理已写入 chunk；检索只召回 `indexed` 文档。
 - 前端已新增 `/agents/rag` 知识库验证页，可创建知识库、填写已存在文件路径入库、查看文档状态、发起 Query 并展示 Answer / Cited Sources。
-- Agent 列表页已隐藏小红书/诗词入口，只保留知识库问答助手入口（当前为未提交工作区改动）。
+- Agent 列表页已隐藏小红书/诗词入口，只保留知识库问答助手入口，避免未完成能力干扰 RAG 验证。
+- 前端 `useUserStore` 已补回 `login(user, token)`、`logout()`、`getTokenStatus()`，修复既有 debug 工具导致的 `tsc` 阻塞。
+- AI 对话流已经补强断流恢复基础能力：`clientMessageId` 幂等、`generationId + seq + afterSeq` 事件续传、前端去重和一次自动重连、失败回复保留部分内容并支持重新生成。
 
 已验证：
 
@@ -39,45 +42,85 @@ ced46c0 feat: add pgvector knowledge base rag
 cd /home/strive/workspace/ai-Chat-all/AI-Chat-Be
 npx jest knowledge.service.spec.ts --runInBand   # 5 passed
 npx tsc --noEmit -p tsconfig.build.json          # passed
+
+cd /home/strive/workspace/ai-Chat-all/AI-Chat
+npx tsc --noEmit                                 # passed（修复 useUserStore 后）
 ```
 
-当前未完成/待处理：
+当前仍需处理：
 
-- 前端 `tsc` 仍失败，根因是 `src/utils/debugHelper.ts`、`src/utils/tokenDebug.ts` 调用了旧版 `useUserStore.login/logout/getTokenStatus`，但当前 `useUserStore` 没有这些方法。
-- 文档入库页面现在要求手动填写 `uploads/...` 路径，还没有和现有大文件上传 UI 打通。
-- RAG 目前是普通 HTTP 返回，还没有接入 SSE 流式输出和消息持久化。
-- Agent 工具调用当前只是 RAG 分支返回 `toolCalls` 记录，还不是完整 LangChain Tool/Agent 执行链。
-- `agent.entity.ts` 仍有大量重复注释，需要清理。
+- RAG 验证页目前仍要求手动填写 `uploads/...` 文件路径，尚未和现有大文件上传 UI 打通。
+- 知识库页面还偏“验证工具”，缺少产品化的知识库列表、详情页、上传区、文档预览、重试/删除、状态轮询等体验。
+- RAG 当前是普通 HTTP 返回，尚未接入正式 Chat/SSE 消息流、消息持久化、历史回答 sources 展示。
+- Agent 工具调用当前只是在 RAG 分支返回 `toolCalls` 记录，还不是完整 LangChain Tool/Agent 执行链。
+- `agent.entity.ts` 仍有大量重复注释，后续需要清理。
+- 当前工作区可能还存在历史文档删除变更（例如前端包下的旧 `ROLLBACK_NOTE.md`、`TEST_GUIDE.md`），提交前需要确认是否属于本轮任务。
+
+## Comet 项目参考取舍（2026-07-01）
+
+已参考同 workspace 下 `/home/strive/workspace/Comet`。Comet 是更完整的个人知识库 + 记忆 + Agent 平台，包含前端知识库管理、文件/网页/图片入库、RAG 检索、Agent 工具编排、Trace/成本统计、记忆图谱等能力。
+
+我们可以借鉴的部分：
+
+- 前端产品形态：`知识库列表 -> 知识库详情 -> 拖拽上传 -> 解析状态 -> 文档预览 -> 重试/删除 -> 检索命中展示`。
+- 前端模块拆分：按业务拆 `knowledge api`、`document api`、知识库列表页、详情页、聊天页，而不是把所有能力堆在一个验证页里。
+- 后端边界：把文档解析、chunk 切分、embedding、检索、回答生成拆成清晰的小模块，Controller 只负责接请求，Service 组织流程。
+- Agent 展示方式：轻量展示 `tool_start`、`tool_result`、`token`、`final` 这类事件，让用户知道模型检索了哪些知识、命中了哪些来源。
+- 可观测性取舍：不用做完整 Trace 系统，但可以保留 `sources`、`toolCalls`、检索耗时、命中数量，方便前端展示和面试讲解。
+
+不建议照搬的部分：
+
+- 不引入 Elasticsearch、Neo4j、Celery、MCP、Verifier Loop、成本核算等重型体系。
+- 不把 Agent 做成 Comet 那种多工具深度编排平台；我们只做“能演示、能讲清楚”的轻量 Agent。
+- 不切换后端技术栈；继续保持 NestJS + PostgreSQL + pgvector。
+- 不扩展情绪、音乐、画像、技能市场等偏离主线的模块。
+
+我们的项目定位：
+
+```text
+前端体验最重要：知识库管理、上传入库、引用展示、流式对话体验要完整。
+后端能力要完整：PostgreSQL/pgvector/RAG/文件安全/状态管理能跑通。
+Agent 保持轻量：熟悉工具调用、检索增强、事件展示，不陷入复杂多 Agent 架构。
+```
 
 ## 下一步开发计划
 
-建议下一阶段先做“可验证体验收口”，再进入 SSE/Agent 深水区：
+建议下一阶段优先做“知识库上传自动入库 + 页面体验升级”，先把可验证体验做完整，再进入 SSE/Agent 深水区。
 
-1. 修复前端 TypeScript 阻塞：在 `useUserStore` 补齐 `login`、`logout`、`getTokenStatus`，或清理两个过期 debug 工具；推荐补齐 store 标准方法，避免调试工具和业务登录状态继续分叉。
-2. 提交当前前端入口整理：把 Agent 列表固定为只展示“知识库问答助手”，避免未完成的诗词/小红书入口干扰 RAG 验证。
-3. 做一次端到端手动验证：准备 `AI-Chat-Be/uploads/demo.md`，在 `/agents/rag` 创建知识库、Index、Query，记录成功截图和失败点。
-4. 打通上传联动：复用现有 file 模块上传/合并结果，让前端不再手写文件路径，而是上传成功后直接调用知识库入库接口。
-5. 补充删除/重建能力：支持删除知识库文档、重新入库同名文档，避免验证时只能不断新增脏数据。
-6. 进入第二阶段体验升级：把 RAG 问答接入 chat/SSE，保存 answer、sources、toolCalls，并支持刷新后查看历史。
+1. 更新本文档进度和路线，确保后续开发都以 Ubuntu 项目 `/home/strive/workspace/ai-Chat-all` 为准。
+2. 升级前端知识库页面：从 `/agents/rag` 验证页逐步演进为知识库管理体验。
+   - 知识库列表：创建、选择、展示文档数量和状态。
+   - 知识库详情：上传文档、文档列表、状态轮询、失败提示、删除/重试入口。
+   - 查询面板：输入问题、展示 Answer、Cited Sources、命中 chunk 信息。
+3. 打通上传联动：复用现有 file 模块上传/合并结果，让前端不再手写文件路径。
+   - 前端上传文件。
+   - 后端保存到 `AI-Chat-Be/uploads/`。
+   - 返回安全的相对路径或文件记录。
+   - 自动调用知识库入库接口。
+   - 页面轮询文档状态直到 `indexed` 或 `failed`。
+4. 补充文档管理能力：支持知识库文档删除、重新入库、同名文档处理，避免验证时不断产生脏数据。
+5. 做一次端到端手动验收：准备 `demo.md`/`demo.pdf`，完成创建知识库、上传入库、Query、Answer + Sources 截图。
+6. 第二阶段再接入正式 Chat/SSE：把 RAG 回答接进对话消息流，保存 answer、sources、toolCalls，并复用已经完成的断流恢复机制。
+7. 第三阶段做轻量 Agent：将 `knowledge_search` 封装为工具，前端展示工具调用状态和检索结果，不做复杂多 Agent/MCP。
 
 ## 当前基础
 
 后端已有能力：
 
 - `users`：注册、登录、邮箱验证码、JWT。
-- `chat`：会话、消息、SSE 流式对话。
+- `chat`：会话、消息、SSE 流式对话、基础断流恢复。
 - `file`：大文件分片上传、断点续传、合并到本地 `uploads/`。
-- `ai`：DashScope/OpenAI 兼容接口，支持文本模型和图片模型。
-- `agent`：诗词、小红书文案、MBTI、RAG 雏形。
-- `rag.service.ts`：已有 LangChain、文本切分、embedding、MemoryVectorStore、PDF 解析雏形。
+- `ai`：DashScope/OpenAI 兼容接口，支持文本模型、embedding 模型和图片模型相关能力。
+- `agent`：历史上包含诗词、小红书文案、MBTI、RAG 雏形；当前前端入口已优先收敛到知识库问答助手。
+- `knowledge`：PostgreSQL + pgvector 知识库 RAG 闭环，支持文档入库、chunk/embedding 持久化、向量检索、answer + sources。
 
 当前主要短板：
 
-- 数据库仍是 MySQL，不适合直接做向量检索亮点。
-- RAG 使用内存向量库，服务重启后新增知识会丢。
-- Agent/RAG 接口还不够产品化，`rag/test` 里有本机绝对路径测试代码。
-- `agent.entity.ts` 有大量重复注释，Agent 模型还没有真正落库。
-- 文件上传和 RAG 入库还没有形成完整闭环。
+- 文件上传和 RAG 入库还没有形成前端一键闭环。
+- 知识库页面还没有产品化，当前更像研发验证页面。
+- RAG 问答还没有融入正式 Chat/SSE 和历史消息体系。
+- Agent 工具调用展示还比较轻，需要进一步沉淀为可演示的 tool event / sources 体验。
+- 工程质量上还需要补充前后端端到端验证文档、更多异常分支测试，以及清理历史冗余注释。
 
 ## 阶段 1：数据库从 MySQL 切到 PostgreSQL
 
@@ -86,7 +129,7 @@ npx tsc --noEmit -p tsconfig.build.json          # passed
 TODO：
 
 - [x] 安装 PostgreSQL 驱动：`pg`。
-- [ ] 保留或移除 `mysql2`：确认是否还需要 MySQL 兼容。
+- [ ] 保留或移除 `mysql2`：确认前后端和部署脚本不再依赖 MySQL 后再清理。
 - [x] 修改 `app.module.ts` 的 TypeORM 类型：`mysql` -> `postgres`。
 - [ ] 修改 `.env` 数据库配置：
   - `DB_HOST=localhost`
@@ -104,11 +147,11 @@ TODO：
   - `Chat`
   - `Message`
   - `FileEntity`
-- [ ] 启动后端，验证 TypeORM 能自动建表。
+- [x] 启动后端，验证 TypeORM 能自动建表。
 
 验收标准：
 
-- [ ] 后端能启动，无数据库连接错误。
+- [x] 后端能启动，无数据库连接错误。
 - [ ] 用户能注册和登录。
 - [ ] 能创建会话。
 - [ ] 能发送普通 AI 消息。
@@ -141,7 +184,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 embedding vector(1536)
 ```
 
-- [ ] 写一个最小化测试接口或脚本：
+- [x] 写一个最小化测试接口或脚本：
   - 插入一条向量。
   - 查询最近向量。
   - 验证 `<->` 相似度排序可用。

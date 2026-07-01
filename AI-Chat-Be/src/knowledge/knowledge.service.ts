@@ -23,6 +23,12 @@ import {
 } from './entities/knowledge-document.entity';
 import { KnowledgeChunk } from './entities/knowledge-chunk.entity';
 
+interface UploadedKnowledgeFile {
+  originalname: string;
+  mimetype?: string;
+  buffer: Buffer;
+}
+
 interface RetrievedChunk {
   id: string;
   documentId: string;
@@ -191,6 +197,43 @@ export class KnowledgeService implements OnModuleInit {
     }
   }
 
+  async indexUploadedDocument(
+    knowledgeBaseId: string,
+    file: UploadedKnowledgeFile,
+    userId: number,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new HttpException('上传文件不能为空', HttpStatus.BAD_REQUEST);
+    }
+
+    const safeFileName = this.getSafeUploadFileName(file.originalname);
+    const storedFileName = `${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}-${safeFileName}`;
+    const uploadsRoot = path.resolve(process.cwd(), 'uploads');
+    const storedPath = path.join(uploadsRoot, storedFileName);
+    const relativeFilePath = `uploads/${storedFileName}`;
+
+    await fs.promises.mkdir(uploadsRoot, { recursive: true });
+    await fs.promises.writeFile(storedPath, file.buffer);
+
+    const result = await this.indexDocument(
+      knowledgeBaseId,
+      {
+        fileName: safeFileName,
+        filePath: relativeFilePath,
+        mimeType: file.mimetype,
+      },
+      userId,
+    );
+
+    return {
+      ...result,
+      fileName: safeFileName,
+      filePath: relativeFilePath,
+    };
+  }
+
   async getDocuments(knowledgeBaseId: string, userId: number) {
     await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
 
@@ -354,6 +397,12 @@ ${ragQueryDto.query}
     }
 
     throw new Error(`暂不支持的文档类型: ${extension || 'unknown'}`);
+  }
+
+  private getSafeUploadFileName(fileName: string): string {
+    const normalizedFileName = (fileName || 'document').replace(/\\/g, '/');
+    const baseName = path.posix.basename(normalizedFileName).trim();
+    return baseName || 'document';
   }
 
   private resolveLocalFilePath(filePath: string): string {

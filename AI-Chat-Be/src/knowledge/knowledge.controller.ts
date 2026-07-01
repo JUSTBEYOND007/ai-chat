@@ -1,10 +1,17 @@
-import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
 import { RequireLogin } from 'src/custom.decorator';
 import { CreateKnowledgeBaseDto } from './dto/create-knowledge-base.dto';
 import { IndexDocumentDto } from './dto/index-document.dto';
 import { RagQueryDto } from './dto/rag-query.dto';
 import { KnowledgeService } from './knowledge.service';
+
+type UploadedKnowledgeFile = {
+  originalname: string;
+  mimetype?: string;
+  buffer: Buffer;
+};
 
 @Controller('knowledge-bases')
 @RequireLogin()
@@ -36,6 +43,20 @@ export class KnowledgeController {
     return this.knowledgeService.indexDocument(
       knowledgeBaseId,
       indexDocumentDto,
+      this.getUserId(request),
+    );
+  }
+
+  @Post(':id/documents/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  indexUploadedDocument(
+    @Param('id') knowledgeBaseId: string,
+    @UploadedFile() file: UploadedKnowledgeFile,
+    @Req() request: Request,
+  ) {
+    return this.knowledgeService.indexUploadedDocument(
+      knowledgeBaseId,
+      file,
       this.getUserId(request),
     );
   }

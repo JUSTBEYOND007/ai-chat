@@ -26,6 +26,19 @@ export const knowledgeApi = {
     }>(`/knowledge-bases/${knowledgeBaseId}/documents`, 'POST', params)
   },
 
+  uploadAndIndexDocument: (knowledgeBaseId: string, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return request<{
+      documentId: string
+      status: string
+      chunkCount: number
+      fileName: string
+      filePath: string
+    }>(`/knowledge-bases/${knowledgeBaseId}/documents/upload`, 'POST', formData)
+  },
+
   getDocuments: (knowledgeBaseId: string) => {
     return request<KnowledgeDocument[]>(`/knowledge-bases/${knowledgeBaseId}/documents`, 'GET')
   },
