@@ -1,10 +1,19 @@
 import type { EventSourcePolyfill } from 'event-source-polyfill'
 
-export type StreamStatus = 'idle' | 'connecting' | 'streaming' | 'completed' | 'aborted' | 'error'
+export type StreamStatus = 'idle' | 'connecting' | 'streaming' | 'recovering' | 'completed' | 'aborted' | 'error'
+
+export type StreamConnectionOptions = {
+  generationId?: string
+  afterSeq?: number
+}
 
 export type StreamChatClientOptions = {
-  createConnection: (chatId: string) => EventSource | EventSourcePolyfill
+  createConnection: (
+    chatId: string,
+    options?: StreamConnectionOptions
+  ) => EventSource | EventSourcePolyfill
   flushInterval?: number
+  maxReconnectAttempts?: number
   onChunk: (chunk: string) => void
   onComplete?: (content: string) => void
   onError?: (error: unknown) => void
@@ -15,15 +24,21 @@ type StreamMessage =
   | {
       type: 'chunk'
       content: string
+      generationId?: string
+      seq?: number
     }
   | {
       type: 'complete'
       content: string
+      generationId?: string
+      seq?: number
     }
   | {
       type: 'error'
       error?: string
       content?: string
+      generationId?: string
+      seq?: number
     }
 
 export class StreamChatClient {
@@ -32,35 +47,29 @@ export class StreamChatClient {
   private fullContent = ''
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private status: StreamStatus = 'idle'
+  private chatId: string | null = null
+  private generationId: string | undefined
+  private lastSeq = 0
+  private reconnectAttempts = 0
+  private closedByClient = false
   private readonly flushInterval: number
+  private readonly maxReconnectAttempts: number
   private readonly options: StreamChatClientOptions
 
   constructor(options: StreamChatClientOptions) {
     this.options = options
     this.flushInterval = options.flushInterval ?? 50
+    this.maxReconnectAttempts = options.maxReconnectAttempts ?? 1
   }
 
   start(chatId: string) {
     this.close()
     this.resetRenderState()
+    this.chatId = chatId
+    this.closedByClient = false
+    this.reconnectAttempts = 0
     this.setStatus('connecting')
-
-    this.eventSource = this.options.createConnection(chatId)
-
-    this.eventSource.onopen = () => {
-      this.setStatus('streaming')
-    }
-
-    this.eventSource.onmessage = (event: MessageEvent) => {
-      this.handleRawMessage(event.data)
-    }
-
-    this.eventSource.onerror = (error: Event) => {
-      this.flushAll()
-      this.setStatus('error')
-      this.options.onError?.(error)
-      this.close()
-    }
+    this.connect()
   }
 
   abort() {
@@ -68,6 +77,7 @@ export class StreamChatClient {
       return
     }
 
+    this.closedByClient = true
     this.flushAll()
     this.setStatus('aborted')
     this.close()
@@ -86,14 +96,79 @@ export class StreamChatClient {
     return this.status
   }
 
+  getRecoveryState() {
+    return {
+      generationId: this.generationId,
+      lastSeq: this.lastSeq
+    }
+  }
+
+  private connect(options: StreamConnectionOptions = {}) {
+    if (!this.chatId) {
+      return
+    }
+
+    this.eventSource = this.options.createConnection(this.chatId, {
+      generationId: options.generationId ?? this.generationId,
+      afterSeq: options.afterSeq ?? 0
+    })
+
+    this.eventSource.onopen = () => {
+      this.setStatus('streaming')
+    }
+
+    this.eventSource.onmessage = (event: MessageEvent) => {
+      this.handleRawMessage(event.data)
+    }
+
+    this.eventSource.onerror = (error: Event) => {
+      this.flushAll()
+
+      if (this.canRecover()) {
+        this.recover()
+        return
+      }
+
+      this.setStatus('error')
+      this.options.onError?.(error)
+      this.close()
+    }
+  }
+
+  private canRecover() {
+    return (
+      !this.closedByClient &&
+      !!this.chatId &&
+      !!this.generationId &&
+      this.reconnectAttempts < this.maxReconnectAttempts
+    )
+  }
+
+  private recover() {
+    this.reconnectAttempts += 1
+    const afterSeq = this.lastSeq
+    this.close()
+    this.setStatus('recovering')
+    this.connect({
+      generationId: this.generationId,
+      afterSeq
+    })
+  }
+
   private handleRawMessage(rawData: string) {
     let data: StreamMessage
     try {
-      data = JSON.parse(rawData) as StreamMessage
+      data = typeof rawData === 'string' ? (JSON.parse(rawData) as StreamMessage) : rawData
     } catch (error) {
       this.setStatus('error')
       this.options.onError?.(error)
       this.close()
+      return
+    }
+
+    this.captureStreamPosition(data)
+
+    if (this.shouldSkipMessage(data)) {
       return
     }
 
@@ -117,6 +192,25 @@ export class StreamChatClient {
       this.options.onError?.(data.error || data.content || 'Stream error')
       this.close()
     }
+  }
+
+  private captureStreamPosition(data: StreamMessage) {
+    if (data.generationId) {
+      this.generationId = data.generationId
+    }
+  }
+
+  private shouldSkipMessage(data: StreamMessage) {
+    if (typeof data.seq !== 'number') {
+      return false
+    }
+
+    if (data.seq <= this.lastSeq) {
+      return true
+    }
+
+    this.lastSeq = data.seq
+    return false
   }
 
   private addToRenderBuffer(chunk: string) {
@@ -167,6 +261,8 @@ export class StreamChatClient {
   private resetRenderState() {
     this.renderBuffer = ''
     this.fullContent = ''
+    this.generationId = undefined
+    this.lastSeq = 0
   }
 
   private setStatus(status: StreamStatus) {

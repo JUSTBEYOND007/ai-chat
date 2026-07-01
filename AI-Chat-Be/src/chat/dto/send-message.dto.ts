@@ -14,4 +14,8 @@ export class SendMessageDto {
   imgUrl?: string[];
 
   fileId?: string;
+
+  clientMessageId?: string;
+
+  regenerate?: boolean;
 }

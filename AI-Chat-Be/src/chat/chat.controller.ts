@@ -131,9 +131,17 @@ export class ChatController {
   }
 
   @Sse('getChat/:id')
-  streamEvents(@Param('id') id: string): Observable<MessageEvent> {
+  streamEvents(
+    @Param('id') id: string,
+    @Query('generationId') generationId?: string,
+    @Query('afterSeq') afterSeq?: string,
+  ): Observable<MessageEvent> {
     console.log('streamEvents', id);
-    return this.chatService.getStreamEvents(id);
+    return this.chatService.getStreamEvents(
+      id,
+      generationId,
+      Number(afterSeq || 0),
+    );
   }
 
   @Post('sendMessage')

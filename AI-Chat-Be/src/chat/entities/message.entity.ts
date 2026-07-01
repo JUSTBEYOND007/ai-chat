@@ -38,6 +38,12 @@ export class Message {
   content: string;
 
   @Column({
+    type: 'varchar',
+    nullable: true,
+  })
+  clientMessageId?: string;
+
+  @Column({
     type: 'json',
     nullable: true,
   })

@@ -30,6 +30,8 @@ export type SendMessageType = {
   message: string
   // imgUrl?: string[]
   fileId?: string
+  clientMessageId?: string
+  regenerate?: boolean
 }
 
 export interface ImageContent {

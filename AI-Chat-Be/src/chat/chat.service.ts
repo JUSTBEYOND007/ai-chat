@@ -1,5 +1,6 @@
 import { Observable, Subject } from 'rxjs';
 import { Between, Like, Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 
 import {
   Injectable,
@@ -20,9 +21,50 @@ import { UpdateTitleDto } from './dto/update-title.dto';
 import { SearchChatDto } from './dto/search-chat.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 
+type StreamEventPayload =
+  | {
+      type: 'chunk';
+      generationId: string;
+      seq: number;
+      content: string;
+      isComplete: false;
+    }
+  | {
+      type: 'complete';
+      generationId: string;
+      seq: number;
+      content: string;
+      isComplete: true;
+    }
+  | {
+      type: 'error';
+      generationId?: string;
+      seq?: number;
+      content: string;
+      isComplete: true;
+    };
+
+type StreamGenerationCache = {
+  chatId: string;
+  generationId: string;
+  events: StreamEventPayload[];
+};
+
+export type SendMessageResult =
+  | {
+      status: 'created';
+      generationId: string;
+    }
+  | {
+      status: 'duplicate';
+      messageId: string;
+    };
+
 @Injectable()
 export class ChatService {
   private chatSubjects = new Map<string, Subject<MessageEvent>>();
+
+  private streamGenerations = new Map<string, StreamGenerationCache>();
 
   private logger = new Logger();
 
@@ -40,106 +82,164 @@ export class ChatService {
 
   constructor() {}
 
-  getStreamEvents(chatId: string): Observable<MessageEvent> {
+  getStreamEvents(
+    chatId: string,
+    generationId?: string,
+    afterSeq = 0,
+  ): Observable<MessageEvent> {
     if (!this.chatSubjects.has(chatId)) {
       this.chatSubjects.set(chatId, new Subject<MessageEvent>());
     }
 
     const subject = this.chatSubjects.get(chatId);
     if (!subject) {
-      throw new HttpException('找不到对应的聊天主题', HttpStatus.NOT_FOUND);
+      throw new HttpException('Chat stream not found', HttpStatus.NOT_FOUND);
     }
-    return subject.asObservable();
+
+    return new Observable<MessageEvent>((subscriber) => {
+      if (generationId) {
+        const generation = this.streamGenerations.get(generationId);
+        if (generation?.chatId === chatId) {
+          generation.events
+            .filter((event) => (event.seq || 0) > afterSeq)
+            .forEach((event) => subscriber.next(this.createMessageEvent(event)));
+        }
+      }
+
+      const subscription = subject.subscribe(subscriber);
+      return () => subscription.unsubscribe();
+    });
   }
 
-  sendMessageToChat(chatId: string, message: any) {
+  sendMessageToChat(chatId: string, message: unknown) {
     if (this.chatSubjects.has(chatId)) {
       const subject = this.chatSubjects.get(chatId);
-      subject?.next(
-        new MessageEvent('message', {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-          data: message,
-          lastEventId: String(Date.now()), // 对应 id
-        }),
-      );
+      subject?.next(this.createMessageEvent(message));
     }
   }
 
-  async useGeminiToChat({ id, message, imgUrl, fileId }: SendMessageDto) {
+  async useGeminiToChat({
+    id,
+    message,
+    imgUrl,
+    fileId,
+    clientMessageId,
+    regenerate,
+  }: SendMessageDto): Promise<SendMessageResult> {
+    const generationId = randomUUID();
+    const generation: StreamGenerationCache = {
+      chatId: id,
+      generationId,
+      events: [],
+    };
+    this.streamGenerations.set(generationId, generation);
+
     try {
       let filePath = '';
       const fileContent: FileContent[] = [];
-      // 用户上传了文件
+
       if (fileId) {
         try {
-          const { data: file } = await this.fileService.getFile(fileId); // 获取文件列表
+          const { data: file } = await this.fileService.getFile(fileId);
 
           filePath = file.filePath;
-          console.log('filePathsss', filePath);
           fileContent.push({
             fileId,
             fileName: file.filePath,
           });
         } catch (error) {
-          this.logger.error(`获取文件 ${fileId} 出错：${error}`);
+          this.logger.error(`Failed to load file ${fileId}: ${error}`);
         }
       }
 
-      await this.saveMessage(
-        id,
-        message,
-        MessageRole.USER,
-        imgUrl,
-        fileContent,
-      ); // 保存用户消息到数据库
+      const existingUserMessage = clientMessageId
+        ? await this.messageRepository.findOne({
+            where: {
+              chatId: id,
+              role: MessageRole.USER,
+              clientMessageId,
+            },
+          })
+        : null;
 
-      const completion = await this.aiService.getMain(
-        message,
-        filePath,
-        imgUrl,
-      );
+      if (existingUserMessage && !regenerate) {
+        this.streamGenerations.delete(generationId);
+        return {
+          status: 'duplicate',
+          messageId: existingUserMessage.id,
+        };
+      }
+
+      if (!existingUserMessage) {
+        await this.saveMessage(
+          id,
+          message,
+          MessageRole.USER,
+          imgUrl,
+          fileContent,
+          clientMessageId,
+        );
+      }
+
+      const completion = await this.aiService.getMain(message, filePath, imgUrl);
 
       let fullContent = '';
+      let seq = 0;
       for await (const chunk of completion) {
         if (Array.isArray(chunk.choices) && chunk.choices.length > 0) {
           const content = chunk.choices[0].delta.content || '';
-          fullContent += content;
+          if (!content) {
+            continue;
+          }
 
-          // 通过SSE发送每个块到前端
-          this.sendMessageToChat(id, {
+          fullContent += content;
+          seq += 1;
+          this.sendGenerationEvent(id, generation, {
             type: 'chunk',
-            content: content,
+            generationId,
+            seq,
+            content,
             isComplete: false,
           });
         }
       }
 
-      // 发送完整内容和完成标志
-      this.sendMessageToChat(id, {
+      seq += 1;
+      this.sendGenerationEvent(id, generation, {
         type: 'complete',
+        generationId,
+        seq,
         content: fullContent,
         isComplete: true,
       });
 
-      await this.saveMessage(id, fullContent, MessageRole.SYSTEM); // 保存AI的响应到数据库
+      await this.saveMessage(id, fullContent, MessageRole.SYSTEM);
 
-      this.logger.log(`聊天 ${id} 的完整响应已发送`);
+      this.logger.log(`Chat ${id} response completed`);
+
+      return {
+        status: 'created',
+        generationId,
+      };
     } catch (error) {
-      this.logger.error(`聊天 ${id} 出错：${error}`);
+      this.logger.error(`Chat ${id} failed: ${error}`);
 
-      // 发送错误信息到前端
-      this.sendMessageToChat(id, {
+      const errorEvent: StreamEventPayload = {
         type: 'error',
-        content: `发生错误: ${error || '未知错误'}`,
+        generationId,
+        seq: generation.events.length + 1,
+        content: `Error: ${error || 'Unknown error'}`,
         isComplete: true,
-      });
+      };
+      generation.events.push(errorEvent);
+      this.sendMessageToChat(id, errorEvent);
 
       this.logger.log(
-        '请参考文档：https://help.aliyun.com/zh/model-studio/developer-reference/error-code',
+        'Reference: https://help.aliyun.com/zh/model-studio/developer-reference/error-code',
       );
 
       throw new HttpException(
-        `聊天出错: ${error || '未知错误'}`,
+        `Chat failed: ${error || 'Unknown error'}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -151,6 +251,7 @@ export class ChatService {
     role: MessageRole,
     imgUrl?: string[],
     fileContent?: FileContent[],
+    clientMessageId?: string,
   ) {
     const message = this.messageRepository.create({
       chatId,
@@ -158,6 +259,7 @@ export class ChatService {
       role,
       imgUrl,
       fileContent,
+      clientMessageId,
     });
 
     return await this.messageRepository.save(message);
@@ -179,18 +281,18 @@ export class ChatService {
   }) {
     const chat = this.chatRepository.create({
       userId,
-      title: chatTitle.slice(0, 8) || '新对话',
+      title: chatTitle.slice(0, 8) || 'New chat',
     });
 
     return await this.chatRepository.save(chat);
   }
 
-  // 更新会话标题
   async updateChatTitle({ title, chatId }: UpdateTitleDto) {
     const chat = await this.getChatById(chatId);
     if (!chat) {
-      throw new HttpException('找不到对应的会话', HttpStatus.NOT_FOUND);
+      throw new HttpException('Chat not found', HttpStatus.NOT_FOUND);
     }
+
     chat.title = title;
     return await this.chatRepository.save(chat);
   }
@@ -208,7 +310,7 @@ export class ChatService {
     });
 
     if (!chat) {
-      throw new HttpException('找不到对应的会话', HttpStatus.NOT_FOUND);
+      throw new HttpException('Chat not found', HttpStatus.NOT_FOUND);
     }
 
     return chat;
@@ -218,7 +320,7 @@ export class ChatService {
     const chat = await this.getChatById(id);
 
     if (!chat) {
-      throw new HttpException('找不到对应的会话', HttpStatus.NOT_FOUND);
+      throw new HttpException('Chat not found', HttpStatus.NOT_FOUND);
     }
 
     chat.isActive = false;
@@ -234,17 +336,38 @@ export class ChatService {
 
   async getOneDayHistory(userId: number) {
     const start = new Date();
-    start.setUTCHours(0, 0, 0, 0); // 设置为当天00:00:00.000 UTC时间
+    start.setUTCHours(0, 0, 0, 0);
 
     const end = new Date();
-    end.setUTCHours(23, 59, 59, 999); // 设置为当天23:59:59.999 UTC时间
+    end.setUTCHours(23, 59, 59, 999);
 
     return await this.chatRepository.find({
       where: {
         userId,
         isActive: true,
-        createTime: Between(start, end), // 直接进行UTC时间比较
+        createTime: Between(start, end),
       },
+    });
+  }
+
+  private sendGenerationEvent(
+    chatId: string,
+    generation: StreamGenerationCache,
+    event: StreamEventPayload,
+  ) {
+    generation.events.push(event);
+    this.sendMessageToChat(chatId, event);
+  }
+
+  private createMessageEvent(message: unknown) {
+    const seq =
+      typeof message === 'object' && message !== null && 'seq' in message
+        ? String((message as { seq?: number }).seq || Date.now())
+        : String(Date.now());
+
+    return new MessageEvent('message', {
+      data: message,
+      lastEventId: seq,
     });
   }
 }

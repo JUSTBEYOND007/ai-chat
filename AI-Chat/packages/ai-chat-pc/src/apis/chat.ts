@@ -36,15 +36,31 @@ export const postMergeFileAPI = (data: mergeChunkType) => {
   return request<mergeResType>('/file/merge', 'POST', data)
 }
 
-// 发送消息
 export const sendChatMessage = (data: SendMessageType): Promise<Data<object>> => {
   return request('chat/sendMessage', 'POST', data)
 }
 
-// 建立sse连接
-export const createSSE = (chatId: string) => {
+export type CreateSSEOptions = {
+  generationId?: string
+  afterSeq?: number
+}
+
+export const createSSE = (chatId: string, options: CreateSSEOptions = {}) => {
   const { token } = useUserStore.getState()
-  return new EventSourcePolyfill(`${BASE_URL}/chat/getChat/${chatId}`, {
+  const params = new URLSearchParams()
+
+  if (options.generationId) {
+    params.set('generationId', options.generationId)
+  }
+
+  if (typeof options.afterSeq === 'number' && options.afterSeq > 0) {
+    params.set('afterSeq', String(options.afterSeq))
+  }
+
+  const query = params.toString()
+  const url = `${BASE_URL}/chat/getChat/${chatId}${query ? `?${query}` : ''}`
+
+  return new EventSourcePolyfill(url, {
     headers: {
       Authorization: token || ''
     }

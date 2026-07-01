@@ -98,7 +98,9 @@ export const MessageItem = memo<MessageItemProps>(
         ? '发送中'
         : message.role === 'user' && message.sendStatus === 'failed'
           ? '发送失败，网络恢复后自动重试'
-          : ''
+          : message.role === 'system' && message.streamStatus === 'interrupted'
+            ? 'AI 回复中断，已保留当前内容，可在输入框上方重新生成'
+            : ''
 
     return (
       <div
@@ -115,7 +117,9 @@ export const MessageItem = memo<MessageItemProps>(
         {statusText && (
           <div
             className={`mt-1 text-xs text-right ${
-              message.sendStatus === 'failed' ? 'text-red-500' : 'text-gray-400'
+              message.sendStatus === 'failed' || message.streamStatus === 'interrupted'
+                ? 'text-orange-500'
+                : 'text-gray-400'
             }`}>
             {statusText}
           </div>

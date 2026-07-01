@@ -4,7 +4,8 @@ import {
   FireOutlined,
   SmileOutlined,
   CloseOutlined,
-  StopOutlined
+  StopOutlined,
+  ReloadOutlined
 } from '@ant-design/icons'
 import { Attachments, Prompts, Sender } from '@ant-design/x'
 import { Button, message, Spin, type GetRef } from 'antd'
@@ -59,8 +60,17 @@ const AIRichInput = () => {
   const filePathRef = useRef<string | null>(null)
   const [showPrompts, setShowPrompts] = useState(true)
   const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
-  const { messages, addMessage, addChunkMessage, mergeMessages, updateMessageStatus } =
-    useChatStore()
+  const {
+    messages,
+    addMessage,
+    addChunkMessage,
+    mergeMessages,
+    updateMessageStatus,
+    startAssistantStream,
+    completeLatestAssistantStream,
+    interruptLatestAssistantStream,
+    removeMessage
+  } = useChatStore()
   const { selectedId, setSelectedId, addConversation } = useConversationStore()
 
   useEffect(() => {
@@ -368,14 +378,17 @@ const AIRichInput = () => {
     text: string,
     // images?: string[],
     fileId?: string,
-    clientMessageId?: string
+    clientMessageId?: string,
+    regenerate = false
   ) => {
     try {
       await sendChatMessage({
         id: chatId,
         message: text,
         // imgUrl: images,
-        fileId
+        fileId,
+        clientMessageId,
+        regenerate
       })
 
       if (clientMessageId) {
@@ -391,6 +404,7 @@ const AIRichInput = () => {
       }
 
       streamClientRef.current?.close()
+      interruptLatestAssistantStream(chatId)
       setInputLoading(false)
       setStreamStatus('error')
       message.error('消息发送失败，网络恢复后会自动重试')
@@ -410,7 +424,8 @@ const AIRichInput = () => {
       await sendChatMessage({
         id: pendingMessage.chatId,
         message: pendingMessage.content,
-        fileId: pendingMessage.fileId
+        fileId: pendingMessage.fileId,
+        clientMessageId: pendingMessage.clientMessageId
       })
       updateMessageStatus(pendingMessage.chatId, pendingMessage.clientMessageId, 'sent')
       await chatLocalDB.markPendingStatus(pendingMessage.clientMessageId, 'sent')
@@ -427,19 +442,28 @@ const AIRichInput = () => {
     message: string,
     // images?: string[],
     fileId?: string,
-    clientMessageId?: string
+    clientMessageId?: string,
+    regenerate = false
   ) => {
     // console.log('images', fileId, images)
     streamClientRef.current?.close()
+    startAssistantStream(chatId, {
+      prompt: message,
+      fileId,
+      clientMessageId
+    })
+
     streamClientRef.current = new StreamChatClient({
       createConnection: createSSE,
       flushInterval: 50,
       onChunk: addChunkMessage,
-      onComplete: () => {
+      onComplete: (content) => {
+        completeLatestAssistantStream(chatId, content)
         setInputLoading(false)
       },
       onError: (error) => {
-        console.error('SSE连接错误:', error)
+        console.error('SSE connection error:', error)
+        interruptLatestAssistantStream(chatId)
         setInputLoading(false)
       },
       onStatusChange: setStreamStatus
@@ -448,14 +472,35 @@ const AIRichInput = () => {
     streamClientRef.current.start(chatId)
 
     // sendMessage(chatId, message, images, fileId)
-    sendMessage(chatId, message, fileId, clientMessageId).catch(() => undefined)
+    sendMessage(chatId, message, fileId, clientMessageId, regenerate).catch(() => undefined)
   }
 
   const stopGeneration = () => {
+    const activeChatId = idRef.current || selectedId
     streamClientRef.current?.abort()
+
+    if (activeChatId) {
+      interruptLatestAssistantStream(activeChatId)
+    }
+
     setInputLoading(false)
   }
 
+  const retryAssistantMessage = (messageId: string, prompt: string, fileId?: string) => {
+    if (!selectedId || inputLoading) {
+      return
+    }
+
+    removeMessage(selectedId, messageId)
+    setInputLoading(true)
+    createSSEAndSendMessage(selectedId, prompt, fileId, undefined, true)
+  }
+
+  const interruptedAssistantMessage = selectedId
+    ? [...(messages.get(selectedId) || [])]
+        .reverse()
+        .find((item) => item.role === 'system' && item.streamStatus === 'interrupted')
+    : undefined
   const submitMessage = async (message: string) => {
     if (inputLoading) {
       return
@@ -687,6 +732,23 @@ const AIRichInput = () => {
           </div>
         )}
 
+        {interruptedAssistantMessage?.id && interruptedAssistantMessage.streamContext && (
+          <div className="mb-2 flex items-center justify-between rounded border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-700">
+            <span>AI 回复已中断，已保留当前内容。</span>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              onClick={() =>
+                retryAssistantMessage(
+                  interruptedAssistantMessage.id!,
+                  interruptedAssistantMessage.streamContext!.prompt,
+                  interruptedAssistantMessage.streamContext!.fileId
+                )
+              }>
+              重新生成
+            </Button>
+          </div>
+        )}
         <Sender
           ref={senderRef}
           value={inputValue}
