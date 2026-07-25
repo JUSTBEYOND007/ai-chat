@@ -32,6 +32,12 @@ async function main() {
   );
   const token = requiredEnvironment('RAG_EVAL_TOKEN').replace(/^Bearer\s+/i, '');
   const knowledgeBaseId = requiredEnvironment('RAG_EVAL_KNOWLEDGE_BASE_ID');
+  const strategy = process.env.RAG_EVAL_STRATEGY || 'vector_baseline';
+  if (!['vector_baseline', 'hybrid_rrf'].includes(strategy)) {
+    throw new Error(
+      'RAG_EVAL_STRATEGY 只支持 vector_baseline 或 hybrid_rrf',
+    );
+  }
   const datasetPath = resolveFromCurrentDirectory(
     process.env.RAG_EVAL_DATASET ||
       'evaluation/datasets/flow-chat-vector-baseline.json',
@@ -69,6 +75,10 @@ async function main() {
         body: JSON.stringify({
           query: evaluationCase.question,
           topK: currentTopK,
+          strategy,
+          rewriteMode: strategy === 'hybrid_rrf' ? 'auto' : 'never',
+          history:
+            strategy === 'hybrid_rrf' ? evaluationCase.history : undefined,
         }),
       },
     );
@@ -83,6 +93,11 @@ async function main() {
   };
 
   const report = await runRagEvaluation(parsedDataset, retrieve, topK);
+  if (report.strategy !== strategy) {
+    throw new Error(
+      `评测策略不一致，期望 ${strategy}，实际 ${report.strategy}`,
+    );
+  }
   const safeTimestamp = report.generatedAt.replace(/[:.]/g, '-');
   const baseName = `${report.strategy}-top${topK}-${safeTimestamp}`;
 

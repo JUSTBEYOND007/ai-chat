@@ -10,6 +10,9 @@
 - [Summary Memory 长会话记忆](./2026-07-23-summary-memory.md)
 - [Agentic RAG 路线重规划](./2026-07-25-agentic-rag-roadmap-replanning.md)
 - [RAG 评测基线与检索数据协议](./2026-07-25-rag-evaluation-baseline-and-retrieval-protocol.md)
+- [Query Rewrite 与 PostgreSQL 双路召回](./2026-07-25-query-rewrite-and-dual-recall.md)
+- [RRF、阈值、结果多样性与 RAG Token Budget](./2026-07-25-rrf-threshold-diversity-selection.md)
+- [Hybrid RAG 真实评测远程执行 Prompt](./2026-07-25-hybrid-rag-evaluation-remote-execution-prompt.md)
 
 项目的每次功能、接口、数据结构、配置、安全策略或用户交互修改，都必须同步新增或更新一份 Markdown 技术文档。
 

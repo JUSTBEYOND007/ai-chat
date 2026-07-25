@@ -12,6 +12,8 @@ import {
 } from './entities/knowledge-document.entity';
 import { KNOWLEDGE_MAX_FILE_SIZE } from './knowledge.constants';
 import { KnowledgeService } from './knowledge.service';
+import { KnowledgeQueryRewriteService } from './query-rewrite.service';
+import { RetrievalFusionService } from './retrieval-fusion.service';
 
 describe('KnowledgeService focused behavior', () => {
   let module: TestingModule;
@@ -39,10 +41,26 @@ describe('KnowledgeService focused behavior', () => {
     }),
   };
 
+  const queryRewriteServiceMock = {
+    rewrite: jest.fn(async ({ query, mode = 'auto' }) => ({
+      originalQuery: query,
+      effectiveQuery: query,
+      trace: {
+        mode,
+        status: 'skipped',
+        reason: mode === 'never' ? 'disabled' : 'not_needed',
+        durationMs: 0,
+        historyMessageCount: 0,
+        usedSummary: false,
+      },
+    })),
+  };
+
   beforeEach(async () => {
     module = await Test.createTestingModule({
       providers: [
         KnowledgeService,
+        RetrievalFusionService,
         {
           provide: getRepositoryToken(KnowledgeBase),
           useValue: repositoryMock,
@@ -62,6 +80,10 @@ describe('KnowledgeService focused behavior', () => {
         {
           provide: ConfigService,
           useValue: configServiceMock,
+        },
+        {
+          provide: KnowledgeQueryRewriteService,
+          useValue: queryRewriteServiceMock,
         },
       ],
     }).compile();
@@ -330,10 +352,215 @@ describe('KnowledgeService focused behavior', () => {
       ],
     });
     expect(trace.timings).toEqual({
+      rewriteMs: 0,
       embeddingMs: expect.any(Number),
       vectorSearchMs: expect.any(Number),
+      keywordSearchMs: 0,
+      fusionMs: 0,
       totalMs: expect.any(Number),
     });
+    expect(trace.channels).toEqual([
+      expect.objectContaining({
+        channel: 'vector',
+        status: 'completed',
+        candidateCount: 1,
+      }),
+      expect.objectContaining({ channel: 'keyword', status: 'skipped' }),
+    ]);
+  });
+
+  it('keeps vector and keyword candidates separate before RRF fusion', async () => {
+    dataSourceMock.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('websearch_to_tsquery')) {
+        return [
+          {
+            id: 'shared-chunk',
+            documentId: 'doc-1',
+            knowledgeBaseId: 'kb-id',
+            chunkIndex: 0,
+            content: 'MAX_TOOL_ROUNDS_EXCEEDED is the exact error code.',
+            fileName: 'agent-runtime.md',
+            score: '0.72',
+          },
+          {
+            id: 'keyword-only',
+            documentId: 'doc-2',
+            knowledgeBaseId: 'kb-id',
+            chunkIndex: 1,
+            content: 'Another exact identifier.',
+            fileName: 'errors.md',
+            score: '0.5',
+          },
+        ];
+      }
+
+      return [
+        {
+          id: 'shared-chunk',
+          documentId: 'doc-1',
+          knowledgeBaseId: 'kb-id',
+          chunkIndex: 0,
+          content: 'MAX_TOOL_ROUNDS_EXCEEDED is the exact error code.',
+          fileName: 'agent-runtime.md',
+          score: '0.88',
+        },
+        {
+          id: 'vector-only',
+          documentId: 'doc-3',
+          knowledgeBaseId: 'kb-id',
+          chunkIndex: 2,
+          content: 'Semantic-only candidate.',
+          fileName: 'semantic.md',
+          score: '0.8',
+        },
+      ];
+    });
+
+    const trace = await service.searchKnowledgeBaseWithTrace(
+      'kb-id',
+      'MAX_TOOL_ROUNDS_EXCEEDED 表示什么？',
+      5,
+      { strategy: 'dual_recall', rewriteMode: 'never' },
+    );
+
+    expect(trace.strategy).toBe('dual_recall');
+    expect(trace.candidates).toHaveLength(3);
+    expect(trace.candidates[0]).toMatchObject({
+      candidateId: 'shared-chunk',
+      selected: false,
+      channels: [
+        { channel: 'vector', rank: 1, score: 0.88 },
+        { channel: 'keyword', rank: 1, score: 0.72 },
+      ],
+    });
+    expect(trace.candidates[0].finalRank).toBeUndefined();
+    expect(trace.channels).toEqual([
+      expect.objectContaining({
+        channel: 'vector',
+        status: 'completed',
+        candidateCount: 2,
+      }),
+      expect.objectContaining({
+        channel: 'keyword',
+        status: 'completed',
+        candidateCount: 2,
+      }),
+    ]);
+  });
+
+  it('keeps keyword results when vector recall fails', async () => {
+    (service as any).embeddings.embedQuery.mockRejectedValueOnce(
+      new Error('embedding unavailable'),
+    );
+    dataSourceMock.query.mockImplementation(async (sql: string) => {
+      if (!sql.includes('websearch_to_tsquery')) {
+        throw new Error('unexpected vector query');
+      }
+
+      return [
+        {
+          id: 'keyword-only',
+          documentId: 'doc-1',
+          knowledgeBaseId: 'kb-id',
+          chunkIndex: 0,
+          content: 'AGENT_TIMEOUT represents the total timeout.',
+          fileName: 'agent-runtime.md',
+          score: '0.6',
+        },
+      ];
+    });
+
+    const trace = await service.searchKnowledgeBaseWithTrace(
+      'kb-id',
+      'AGENT_TIMEOUT 是什么？',
+      5,
+      { strategy: 'dual_recall', rewriteMode: 'never' },
+    );
+
+    expect(trace.candidates).toHaveLength(1);
+    expect(trace.channels).toEqual([
+      expect.objectContaining({ channel: 'vector', status: 'failed' }),
+      expect.objectContaining({
+        channel: 'keyword',
+        status: 'completed',
+        candidateCount: 1,
+      }),
+    ]);
+  });
+
+  it('applies RRF selection only for the hybrid strategy', async () => {
+    dataSourceMock.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('websearch_to_tsquery')) {
+        return [
+          {
+            id: 'shared',
+            documentId: 'doc-1',
+            knowledgeBaseId: 'kb-id',
+            chunkIndex: 0,
+            content: 'AGENT_TIMEOUT exact context.',
+            tokenCount: 10,
+            fileName: 'agent-runtime.md',
+            score: '0.7',
+          },
+        ];
+      }
+
+      return [
+        {
+          id: 'semantic',
+          documentId: 'doc-2',
+          knowledgeBaseId: 'kb-id',
+          chunkIndex: 0,
+          content: 'Timeout semantic context.',
+          tokenCount: 10,
+          fileName: 'timeout.md',
+          score: '0.92',
+        },
+        {
+          id: 'shared',
+          documentId: 'doc-1',
+          knowledgeBaseId: 'kb-id',
+          chunkIndex: 0,
+          content: 'AGENT_TIMEOUT exact context.',
+          tokenCount: 10,
+          fileName: 'agent-runtime.md',
+          score: '0.85',
+        },
+      ];
+    });
+
+    const trace = await service.searchKnowledgeBaseWithTrace(
+      'kb-id',
+      'AGENT_TIMEOUT 是什么？',
+      2,
+      { strategy: 'hybrid_rrf', rewriteMode: 'never' },
+    );
+
+    expect(trace.strategy).toBe('hybrid_rrf');
+    expect(trace.selection).toMatchObject({
+      rrfK: 60,
+      requestedTopK: 2,
+      selectedCount: 2,
+      selectedTokens: 20,
+    });
+    expect(trace.candidates[0]).toMatchObject({
+      candidateId: 'shared',
+      selected: true,
+      finalRank: 1,
+      channels: expect.arrayContaining([
+        expect.objectContaining({ channel: 'fused', rank: 1 }),
+      ]),
+    });
+    expect(trace.channels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: 'fused',
+          status: 'completed',
+          candidateCount: 2,
+        }),
+      ]),
+    );
+    expect(trace.timings.fusionMs).toEqual(expect.any(Number));
   });
 
   it('protects retrieval debug traces with knowledge-base ownership', async () => {

@@ -49,9 +49,34 @@ const trace = (
   knowledgeBaseId: 'kb-id',
   originalQuery: 'query',
   effectiveQuery: 'query',
+  rewrite: {
+    mode: 'never',
+    status: 'skipped',
+    reason: 'disabled',
+    durationMs: 0,
+    historyMessageCount: 0,
+    usedSummary: false,
+  },
   topK: 2,
   candidates,
-  timings: { embeddingMs: 2, vectorSearchMs: 3, totalMs },
+  channels: [
+    {
+      channel: 'vector',
+      status: 'completed',
+      candidateLimit: 2,
+      candidateCount: candidates.length,
+      durationMs: 5,
+      query: 'query',
+    },
+  ],
+  timings: {
+    rewriteMs: 0,
+    embeddingMs: 2,
+    vectorSearchMs: 3,
+    keywordSearchMs: 0,
+    fusionMs: 0,
+    totalMs,
+  },
   generatedAt: '2026-07-25T00:00:00.000Z',
 });
 

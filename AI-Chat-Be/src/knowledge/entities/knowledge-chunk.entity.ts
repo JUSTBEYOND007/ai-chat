@@ -29,6 +29,13 @@ export class KnowledgeChunk {
   @Column({ type: 'text' })
   content: string;
 
+  @Column({
+    type: 'tsvector',
+    select: false,
+    nullable: true,
+  })
+  searchVector?: string;
+
   @Column({ nullable: true })
   tokenCount?: number;
 

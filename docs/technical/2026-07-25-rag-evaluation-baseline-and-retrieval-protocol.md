@@ -71,18 +71,24 @@ interface RagEvaluationCase {
 ```ts
 interface RetrievalTrace {
   version: '1.0';
-  strategy: 'vector_baseline' | 'hybrid_rrf';
+  strategy: 'vector_baseline' | 'dual_recall' | 'hybrid_rrf';
   knowledgeBaseId: string;
   originalQuery: string;
   effectiveQuery: string;
   rewrittenQuery?: string;
+  rewrite: QueryRewriteTrace;
   topK: number;
   candidates: RetrievalCandidate[];
+  channels: RetrievalChannelTrace[];
   timings: {
+    rewriteMs: number;
     embeddingMs: number;
     vectorSearchMs: number;
+    keywordSearchMs: number;
+    fusionMs: number;
     totalMs: number;
   };
+  selection?: RetrievalSelectionTrace;
   generatedAt: string;
 }
 ```
@@ -95,7 +101,7 @@ interface RetrievalTrace {
 - `filterReasons`：阈值、重复 chunk、相邻 chunk 或文档配额等过滤原因；
 - 文档、chunk、内容、Token 和 metadata 信息。
 
-本轮策略为 `vector_baseline`，所以每个候选只有 vector 通道、全部 `selected=true`、`filterReasons=[]`。预留字段用于下一轮扩展，不代表混合检索已经完成。
+纯向量 baseline 中每个候选只有 vector 通道、全部 `selected=true`、`filterReasons=[]`。后续迭代已经在同一协议上增加 `dual_recall` 原始候选、Rewrite 和通道状态；双路候选仍未经过 RRF，因此不代表完整混合检索已经完成。
 
 ## API 变更
 

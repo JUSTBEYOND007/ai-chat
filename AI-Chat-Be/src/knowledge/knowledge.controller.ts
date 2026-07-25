@@ -136,6 +136,12 @@ export class KnowledgeController {
       retrievalDebugDto.query,
       retrievalDebugDto.topK || 5,
       this.getUserId(request),
+      {
+        strategy: retrievalDebugDto.strategy,
+        rewriteMode: retrievalDebugDto.rewriteMode,
+        history: retrievalDebugDto.history,
+        summary: retrievalDebugDto.summary,
+      },
     );
   }
 

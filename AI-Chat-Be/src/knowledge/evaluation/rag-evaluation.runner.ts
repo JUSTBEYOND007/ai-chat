@@ -105,7 +105,11 @@ function evaluateCompletedCase(
   const expectedDocuments = toExpectedDocumentKeys(evaluationCase);
   const selectedCandidates = trace.candidates
     .filter((candidate) => candidate.selected)
-    .sort((a, b) => a.finalRank - b.finalRank);
+    .sort(
+      (a, b) =>
+        (a.finalRank ?? Number.MAX_SAFE_INTEGER) -
+        (b.finalRank ?? Number.MAX_SAFE_INTEGER),
+    );
   const retrievedDocuments = Array.from(
     new Set(selectedCandidates.map((candidate) => candidate.fileName)),
   );
@@ -116,7 +120,8 @@ function evaluateCompletedCase(
   );
   const firstRelevantRank =
     firstRelevantIndex >= 0
-      ? selectedCandidates[firstRelevantIndex].finalRank
+      ? selectedCandidates[firstRelevantIndex].finalRank ??
+        firstRelevantIndex + 1
       : null;
   const hitDocumentKeys = new Set<string>();
 
