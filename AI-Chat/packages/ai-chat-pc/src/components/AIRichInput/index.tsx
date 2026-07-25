@@ -8,7 +8,7 @@ import {
   ReloadOutlined
 } from '@ant-design/icons'
 import { Attachments, Prompts, Sender } from '@ant-design/x'
-import { Button, message, Spin, type GetRef } from 'antd'
+import { Button, message, Select, Spin, type GetRef } from 'antd'
 import React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import SparkMD5 from 'spark-md5'
@@ -20,6 +20,7 @@ import {
   postMergeFileAPI,
   sendChatMessage
 } from '@pc/apis/chat'
+import { knowledgeApi } from '@pc/apis/knowledge'
 import { sessionApi } from '@pc/apis/session'
 import { BASE_URL, DEFAULT_MESSAGE } from '@pc/constant'
 import { useChatStore, useConversationStore } from '@pc/store'
@@ -30,6 +31,7 @@ import { StreamChatClient, type StreamStatus } from '@pc/utils/streamChatClient'
 import type { PromptsProps } from '@ant-design/x'
 import type { UploadFile } from 'antd'
 import type { RcFile } from 'antd/es/upload'
+import type { KnowledgeBase } from '@pc/types/rag'
 
 // 切片的大小 - 使用2MB分片大小以提高上传效率
 const CHUNK_SIZE = 1024 * 1024 * 2
@@ -60,10 +62,13 @@ const AIRichInput = () => {
   const filePathRef = useRef<string | null>(null)
   const [showPrompts, setShowPrompts] = useState(true)
   const [streamStatus, setStreamStatus] = useState<StreamStatus>('idle')
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
+  const [knowledgeBaseId, setKnowledgeBaseId] = useState<string>()
   const {
     messages,
     addMessage,
     addChunkMessage,
+    applyAgentEvent,
     mergeMessages,
     updateMessageStatus,
     startAssistantStream,
@@ -108,6 +113,25 @@ const AIRichInput = () => {
       window.removeEventListener('online', retryPendingMessages)
     }
   }, [updateMessageStatus])
+
+  useEffect(() => {
+    let ignore = false
+
+    knowledgeApi
+      .getKnowledgeBases()
+      .then(({ data }) => {
+        if (!ignore) {
+          setKnowledgeBases(data || [])
+        }
+      })
+      .catch((error) => {
+        console.warn('Failed to load knowledge bases for chat:', error)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [])
 
   // 监听输入值变化
   const handleInputChange = (value: string) => {
@@ -379,6 +403,7 @@ const AIRichInput = () => {
     // images?: string[],
     fileId?: string,
     clientMessageId?: string,
+    selectedKnowledgeBaseId?: string,
     regenerate = false
   ) => {
     try {
@@ -388,6 +413,7 @@ const AIRichInput = () => {
         // imgUrl: images,
         fileId,
         clientMessageId,
+        knowledgeBaseId: selectedKnowledgeBaseId,
         regenerate
       })
 
@@ -404,7 +430,7 @@ const AIRichInput = () => {
       }
 
       streamClientRef.current?.close()
-      interruptLatestAssistantStream(chatId)
+      interruptLatestAssistantStream(chatId, '消息发送失败')
       setInputLoading(false)
       setStreamStatus('error')
       message.error('消息发送失败，网络恢复后会自动重试')
@@ -425,7 +451,8 @@ const AIRichInput = () => {
         id: pendingMessage.chatId,
         message: pendingMessage.content,
         fileId: pendingMessage.fileId,
-        clientMessageId: pendingMessage.clientMessageId
+        clientMessageId: pendingMessage.clientMessageId,
+        knowledgeBaseId: pendingMessage.knowledgeBaseId
       })
       updateMessageStatus(pendingMessage.chatId, pendingMessage.clientMessageId, 'sent')
       await chatLocalDB.markPendingStatus(pendingMessage.clientMessageId, 'sent')
@@ -443,6 +470,7 @@ const AIRichInput = () => {
     // images?: string[],
     fileId?: string,
     clientMessageId?: string,
+    selectedKnowledgeBaseId?: string,
     regenerate = false
   ) => {
     // console.log('images', fileId, images)
@@ -450,20 +478,22 @@ const AIRichInput = () => {
     startAssistantStream(chatId, {
       prompt: message,
       fileId,
-      clientMessageId
+      clientMessageId,
+      knowledgeBaseId: selectedKnowledgeBaseId
     })
 
     streamClientRef.current = new StreamChatClient({
       createConnection: createSSE,
       flushInterval: 50,
-      onChunk: addChunkMessage,
-      onComplete: (content) => {
-        completeLatestAssistantStream(chatId, content)
+      onChunk: (chunk) => addChunkMessage(chunk, chatId),
+      onAgentEvent: (event) => applyAgentEvent(chatId, event),
+      onComplete: (content, metadata) => {
+        completeLatestAssistantStream(chatId, content, metadata)
         setInputLoading(false)
       },
       onError: (error) => {
         console.error('SSE connection error:', error)
-        interruptLatestAssistantStream(chatId)
+        interruptLatestAssistantStream(chatId, String(error || 'Agent 执行失败'))
         setInputLoading(false)
       },
       onStatusChange: setStreamStatus
@@ -472,7 +502,9 @@ const AIRichInput = () => {
     streamClientRef.current.start(chatId)
 
     // sendMessage(chatId, message, images, fileId)
-    sendMessage(chatId, message, fileId, clientMessageId, regenerate).catch(() => undefined)
+    sendMessage(chatId, message, fileId, clientMessageId, selectedKnowledgeBaseId, regenerate).catch(
+      () => undefined
+    )
   }
 
   const stopGeneration = () => {
@@ -486,14 +518,19 @@ const AIRichInput = () => {
     setInputLoading(false)
   }
 
-  const retryAssistantMessage = (messageId: string, prompt: string, fileId?: string) => {
+  const retryAssistantMessage = (
+    messageId: string,
+    prompt: string,
+    fileId?: string,
+    selectedKnowledgeBaseId?: string
+  ) => {
     if (!selectedId || inputLoading) {
       return
     }
 
     removeMessage(selectedId, messageId)
     setInputLoading(true)
-    createSSEAndSendMessage(selectedId, prompt, fileId, undefined, true)
+    createSSEAndSendMessage(selectedId, prompt, fileId, undefined, selectedKnowledgeBaseId, true)
   }
 
   const interruptedAssistantMessage = selectedId
@@ -564,6 +601,7 @@ const AIRichInput = () => {
         clientMessageId,
         sendStatus: 'pending' as const,
         createdAt,
+        knowledgeBaseId,
         content: [
           {
             type: 'text' as const,
@@ -580,6 +618,7 @@ const AIRichInput = () => {
         chatId: targetChatId,
         content: textMessage,
         fileId: fileIdRef.current ? fileIdRef.current : undefined,
+        knowledgeBaseId,
         createdAt
       })
     }
@@ -607,7 +646,8 @@ const AIRichInput = () => {
         textMessage,
         // selectedImages.length > 0 ? selectedImages : undefined,
         fileIdRef.current ? fileIdRef.current : undefined,
-        clientMessageId
+        clientMessageId,
+        knowledgeBaseId
       )
     }
 
@@ -715,6 +755,25 @@ const AIRichInput = () => {
       <div
         className={`fixed w-1/2 z-50 ${!selectedId ? 'bottom-1/3' : 'bottom-0'} pb-[30px] bg-white`}>
         {showDefaultMessage()}
+        {knowledgeBases.length > 0 && (
+          <div className="mb-2 flex items-center gap-2 text-xs text-gray-500">
+            <span>知识库模式</span>
+            <Select
+              allowClear
+              size="small"
+              className="min-w-48"
+              placeholder="不使用知识库（普通对话）"
+              value={knowledgeBaseId}
+              onChange={setKnowledgeBaseId}
+              options={knowledgeBases.map((knowledgeBase) => ({
+                value: knowledgeBase.id,
+                label: knowledgeBase.description
+                  ? `${knowledgeBase.name} - ${knowledgeBase.description}`
+                  : knowledgeBase.name
+              }))}
+            />
+          </div>
+        )}
         {!inputLoading && !hasInput && showPrompts && (
           <div className="flex justify-between">
             <Prompts
@@ -742,7 +801,8 @@ const AIRichInput = () => {
                 retryAssistantMessage(
                   interruptedAssistantMessage.id!,
                   interruptedAssistantMessage.streamContext!.prompt,
-                  interruptedAssistantMessage.streamContext!.fileId
+                  interruptedAssistantMessage.streamContext!.fileId,
+                  interruptedAssistantMessage.streamContext!.knowledgeBaseId
                 )
               }>
               重新生成

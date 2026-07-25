@@ -4,6 +4,7 @@ import type {
   CreateKnowledgeBaseParams,
   IndexKnowledgeDocumentParams,
   KnowledgeBase,
+  KnowledgeDocumentActionResponse,
   KnowledgeDocument,
   KnowledgeQueryParams,
   KnowledgeQueryResponse
@@ -41,6 +42,20 @@ export const knowledgeApi = {
 
   getDocuments: (knowledgeBaseId: string) => {
     return request<KnowledgeDocument[]>(`/knowledge-bases/${knowledgeBaseId}/documents`, 'GET')
+  },
+
+  retryDocument: (knowledgeBaseId: string, documentId: string) => {
+    return request<KnowledgeDocumentActionResponse>(
+      `/knowledge-bases/${knowledgeBaseId}/documents/${documentId}/retry`,
+      'POST'
+    )
+  },
+
+  deleteDocument: (knowledgeBaseId: string, documentId: string) => {
+    return request<KnowledgeDocumentActionResponse>(
+      `/knowledge-bases/${knowledgeBaseId}/documents/${documentId}`,
+      'DELETE'
+    )
   },
 
   queryKnowledgeBase: (knowledgeBaseId: string, params: KnowledgeQueryParams) => {

@@ -2,8 +2,16 @@ import { create } from 'zustand'
 
 import { useConversationStore } from './useConversationStore'
 
-import type { MessageContent } from '@pc/types/chat'
+import type {
+  AgentStreamEvent,
+  ChatAgentStep,
+  ChatContextUsage,
+  ChatToolCall,
+  MessageContent
+} from '@pc/types/chat'
 import type { Role } from '@pc/types/common'
+import type { KnowledgeSource } from '@pc/types/rag'
+import { interruptAgentSteps, reduceAgentSteps } from '@pc/utils/agentTrace'
 
 export type MessageSendStatus = 'pending' | 'sent' | 'failed'
 export type MessageStreamStatus = 'streaming' | 'completed' | 'interrupted'
@@ -12,6 +20,7 @@ export type AssistantStreamContext = {
   prompt: string
   fileId?: string
   clientMessageId?: string
+  knowledgeBaseId?: string
 }
 
 export type MessageProps = {
@@ -20,6 +29,12 @@ export type MessageProps = {
   sendStatus?: MessageSendStatus
   streamStatus?: MessageStreamStatus
   streamContext?: AssistantStreamContext
+  generationId?: string
+  agentSteps?: ChatAgentStep[]
+  contextUsage?: ChatContextUsage
+  knowledgeBaseId?: string
+  sources?: KnowledgeSource[]
+  toolCalls?: ChatToolCall[]
   createdAt?: number
   content: MessageContent[]
   role: Role
@@ -53,10 +68,23 @@ const findLatestAssistantIndex = (messages: MessageProps[]) => {
 export interface ChatStoreProps {
   messages: ChatMessageProps
   addMessage: (message: MessageProps, chatId?: string) => void
-  addChunkMessage: (chunk: string) => void
+  addChunkMessage: (chunk: string, chatId?: string) => void
+  applyAgentEvent: (chatId: string, event: AgentStreamEvent) => void
   startAssistantStream: (chatId: string, streamContext: AssistantStreamContext) => string | undefined
-  completeLatestAssistantStream: (chatId: string, content?: string) => void
-  interruptLatestAssistantStream: (chatId: string) => void
+  completeLatestAssistantStream: (
+    chatId: string,
+    content?: string,
+    metadata?: Pick<
+      MessageProps,
+      | 'generationId'
+      | 'knowledgeBaseId'
+      | 'sources'
+      | 'toolCalls'
+      | 'agentSteps'
+      | 'contextUsage'
+    >
+  ) => void
+  interruptLatestAssistantStream: (chatId: string, reason?: string) => void
   removeMessage: (chatId: string, messageId: string) => void
   setMessages: (chatId: string, messages: MessageProps[]) => void
   mergeMessages: (chatId: string, messages: MessageProps[]) => void
@@ -91,15 +119,16 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
     })
   },
 
-  addChunkMessage: (chunk) => {
+  addChunkMessage: (chunk, chatId) => {
     const { selectedId } = useConversationStore.getState()
+    const targetChatId = chatId || selectedId
 
-    if (!selectedId) {
+    if (!targetChatId) {
       return
     }
 
     set((state) => {
-      const currentMessages = [...(state.messages.get(selectedId) || [])]
+      const currentMessages = [...(state.messages.get(targetChatId) || [])]
       const lastMessage = currentMessages[currentMessages.length - 1]
 
       if (lastMessage && lastMessage.role === 'system') {
@@ -131,11 +160,38 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
       }
 
       const newMessages = new Map(state.messages)
-      newMessages.set(selectedId, currentMessages)
+      newMessages.set(targetChatId, currentMessages)
 
       return {
         messages: newMessages
       }
+    })
+  },
+
+  applyAgentEvent: (chatId, event) => {
+    set((state) => {
+      const currentMessages = [...(state.messages.get(chatId) || [])]
+      const latestAssistantIndex = findLatestAssistantIndex(currentMessages)
+
+      if (latestAssistantIndex < 0) {
+        return state
+      }
+
+      const assistantMessage = currentMessages[latestAssistantIndex]
+      currentMessages[latestAssistantIndex] = {
+        ...assistantMessage,
+        generationId: event.generationId,
+        streamStatus: 'streaming',
+        contextUsage:
+          event.type === 'generation_start'
+            ? event.contextUsage
+            : assistantMessage.contextUsage,
+        agentSteps: reduceAgentSteps(assistantMessage.agentSteps, event)
+      }
+
+      const newMessages = new Map(state.messages)
+      newMessages.set(chatId, currentMessages)
+      return { messages: newMessages }
     })
   },
 
@@ -153,6 +209,8 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
         createdAt: Date.now(),
         streamStatus: 'streaming',
         streamContext,
+        knowledgeBaseId: streamContext.knowledgeBaseId,
+        agentSteps: [],
         content: [createTextContent('')],
         role: 'system'
       })
@@ -168,7 +226,7 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
     return messageId
   },
 
-  completeLatestAssistantStream: (chatId, content) => {
+  completeLatestAssistantStream: (chatId, content, metadata) => {
     set((state) => {
       const currentMessages = [...(state.messages.get(chatId) || [])]
       const latestAssistantIndex = findLatestAssistantIndex(currentMessages)
@@ -196,7 +254,13 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
       currentMessages[latestAssistantIndex] = {
         ...assistantMessage,
         content: nextContent,
-        streamStatus: 'completed'
+        streamStatus: 'completed',
+        generationId: metadata?.generationId ?? assistantMessage.generationId,
+        knowledgeBaseId: metadata?.knowledgeBaseId ?? assistantMessage.knowledgeBaseId,
+        sources: metadata?.sources ?? assistantMessage.sources,
+        toolCalls: metadata?.toolCalls ?? assistantMessage.toolCalls,
+        agentSteps: metadata?.agentSteps ?? assistantMessage.agentSteps,
+        contextUsage: metadata?.contextUsage ?? assistantMessage.contextUsage
       }
 
       const newMessages = new Map(state.messages)
@@ -208,7 +272,7 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
     })
   },
 
-  interruptLatestAssistantStream: (chatId) => {
+  interruptLatestAssistantStream: (chatId, reason) => {
     set((state) => {
       const currentMessages = [...(state.messages.get(chatId) || [])]
       const latestAssistantIndex = findLatestAssistantIndex(currentMessages)
@@ -224,13 +288,21 @@ export const useChatStore = create<ChatStoreProps>((set) => ({
       )
 
       if (!hasTextContent) {
-        nextContent.push(createTextContent('回复中断，未收到完整内容。'))
+        nextContent.push(
+          createTextContent(reason ? '回复失败，请稍后重试。' : '回复中断，未收到完整内容。')
+        )
       }
 
       currentMessages[latestAssistantIndex] = {
         ...assistantMessage,
         content: nextContent,
-        streamStatus: 'interrupted'
+        streamStatus: 'interrupted',
+        agentSteps: interruptAgentSteps(
+          assistantMessage.agentSteps,
+          reason
+            ? { code: 'STREAM_ERROR', message: reason }
+            : { code: 'INTERRUPTED', message: '用户中断了本次生成' }
+        )
       }
 
       const newMessages = new Map(state.messages)

@@ -1,0 +1,286 @@
+{
+  "$schema": "./rag-evaluation.schema.json",
+  "version": "1.0",
+  "name": "flow-chat-vector-baseline-v1",
+  "description": "A reproducible retrieval dataset for the Flow-Chat evaluation fixture corpus. It covers normal questions, exact terms, unanswerable questions, multi-document questions, historical follow-ups and a deprecated/current policy conflict.",
+  "defaultTopK": 5,
+  "cases": [
+    {
+      "id": "architecture-frontend-stack",
+      "category": "answerable",
+      "question": "Flow-Chat 前端使用了哪些核心技术？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["architecture.md"],
+        "requiredKeywords": ["React", "TypeScript", "Zustand", "Vite"]
+      },
+      "tags": ["architecture", "frontend"]
+    },
+    {
+      "id": "architecture-backend-storage",
+      "category": "answerable",
+      "question": "后端框架、ORM、关系数据库和向量数据库扩展分别是什么？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["architecture.md"],
+        "requiredKeywords": ["NestJS", "TypeORM", "PostgreSQL", "pgvector"]
+      }
+    },
+    {
+      "id": "architecture-security-isolation",
+      "category": "answerable",
+      "question": "知识库接口如何避免用户读取其他人的私有数据？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["architecture.md"],
+        "requiredKeywords": ["JWT", "ownership"]
+      }
+    },
+    {
+      "id": "stream-replay-protocol",
+      "category": "answerable",
+      "question": "SSE 断线以后通过哪些字段恢复并过滤已经收到的事件？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["stream-reliability.md"],
+        "requiredKeywords": ["generationId", "afterSeq", "seq"]
+      }
+    },
+    {
+      "id": "stream-deduplication",
+      "category": "answerable",
+      "question": "刷新或弱网重试时，项目怎样降低重复发送用户消息的风险？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["stream-reliability.md"],
+        "requiredKeywords": ["clientMessageId", "IndexedDB"]
+      }
+    },
+    {
+      "id": "stream-real-cancel-status",
+      "category": "answerable",
+      "question": "当前点击停止生成是否会真正取消服务端模型和工具执行？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["stream-reliability.md"],
+        "requiredKeywords": ["AbortSignal", "does not yet"]
+      }
+    },
+    {
+      "id": "agent-tools",
+      "category": "answerable",
+      "question": "Agent Runtime 第一版提供了哪两个工具？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["agent-runtime.md"],
+        "requiredKeywords": ["calculator", "knowledge_search"]
+      }
+    },
+    {
+      "id": "agent-loop-limits",
+      "category": "answerable",
+      "question": "受控 Agent Loop 默认最多调用几轮工具，总超时是多少？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["agent-runtime.md"],
+        "requiredKeywords": ["three", "45 seconds"]
+      }
+    },
+    {
+      "id": "agent-error-max-rounds",
+      "category": "exact_term",
+      "question": "错误码 MAX_TOOL_ROUNDS_EXCEEDED 表示什么？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["agent-runtime.md"],
+        "requiredKeywords": ["MAX_TOOL_ROUNDS_EXCEEDED"]
+      },
+      "tags": ["error-code"]
+    },
+    {
+      "id": "agent-error-timeout",
+      "category": "exact_term",
+      "question": "AGENT_TIMEOUT 在系统中代表哪类失败？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["agent-runtime.md"],
+        "requiredKeywords": ["AGENT_TIMEOUT"]
+      },
+      "tags": ["error-code"]
+    },
+    {
+      "id": "agent-trace-persistence",
+      "category": "answerable",
+      "question": "为什么刷新页面后仍然可以恢复 Agent 的执行过程？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["agent-runtime.md"],
+        "requiredKeywords": ["persists", "assistant message"]
+      }
+    },
+    {
+      "id": "context-default-budget",
+      "category": "answerable",
+      "question": "Context Builder 默认的输入预算、回答预留和工具结果预算各是多少？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["context-and-memory.md"],
+        "requiredKeywords": ["12,000", "2,000"]
+      }
+    },
+    {
+      "id": "memory-scope-isolation",
+      "category": "answerable",
+      "question": "不同知识库之间能否共用同一份摘要记忆？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["context-and-memory.md"],
+        "requiredKeywords": ["independent scope", "must not"]
+      }
+    },
+    {
+      "id": "memory-trigger-and-keep",
+      "category": "answerable",
+      "question": "摘要记忆默认在多少条消息后考虑生成，又保留多少条最近原文？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["context-and-memory.md"],
+        "requiredKeywords": ["16", "8"]
+      }
+    },
+    {
+      "id": "memory-through-message-id",
+      "category": "exact_term",
+      "question": "throughMessageId 在摘要增量更新中有什么作用？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["context-and-memory.md"],
+        "requiredKeywords": ["throughMessageId", "incremental"]
+      }
+    },
+    {
+      "id": "ingestion-file-types",
+      "category": "answerable",
+      "question": "知识库上传支持哪些文件扩展名？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["knowledge-ingestion.md"],
+        "requiredKeywords": [".txt", ".md", ".markdown", ".pdf"]
+      }
+    },
+    {
+      "id": "ingestion-current-limit",
+      "category": "multi_document",
+      "question": "知识库文档当前生效的最大上传限制是多少？不要采用已废弃草案。",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["knowledge-ingestion.md"],
+        "requiredKeywords": ["20 MB"]
+      },
+      "notes": "Tests whether retrieval prefers the current policy over upload-policy-draft.md, which contains a conflicting 10 MB proposal."
+    },
+    {
+      "id": "ingestion-status-retry",
+      "category": "answerable",
+      "question": "文档入库有哪些状态，哪一种状态允许重试？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["knowledge-ingestion.md"],
+        "requiredKeywords": ["pending", "parsing", "indexed", "failed"]
+      }
+    },
+    {
+      "id": "ingestion-chunk-settings",
+      "category": "answerable",
+      "question": "知识文档切片大小和重叠字符数分别是多少？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["knowledge-ingestion.md"],
+        "requiredKeywords": ["1,000", "200"]
+      }
+    },
+    {
+      "id": "multi-doc-resilience-chain",
+      "category": "multi_document",
+      "question": "从浏览器本地消息到服务端 Agent，项目分别用什么机制处理重复消息和超时？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["stream-reliability.md", "agent-runtime.md"],
+        "requiredKeywords": ["clientMessageId", "AGENT_TIMEOUT"]
+      }
+    },
+    {
+      "id": "followup-duplicate-message",
+      "category": "contextual_followup",
+      "history": [
+        {
+          "role": "user",
+          "content": "请介绍 Flow-Chat 的 SSE 可靠性设计。"
+        },
+        {
+          "role": "assistant",
+          "content": "它使用 generationId、seq 和本地待发送队列等机制。"
+        }
+      ],
+      "question": "那它具体如何避免重复消息？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["stream-reliability.md"],
+        "requiredKeywords": ["clientMessageId"]
+      },
+      "notes": "The vector baseline sends only the final question. A later Query Rewrite strategy should use history."
+    },
+    {
+      "id": "followup-memory-number",
+      "category": "contextual_followup",
+      "history": [
+        {
+          "role": "user",
+          "content": "项目什么时候生成摘要记忆？"
+        },
+        {
+          "role": "assistant",
+          "content": "达到默认触发条件后会压缩较早消息。"
+        }
+      ],
+      "question": "这个默认条件具体是多少？",
+      "expected": {
+        "answerable": true,
+        "documentFileNames": ["context-and-memory.md"],
+        "requiredKeywords": ["16"]
+      }
+    },
+    {
+      "id": "unanswerable-production-sla",
+      "category": "unanswerable",
+      "question": "Flow-Chat 正式生产环境承诺的 SLA 是多少？",
+      "expected": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable-active-users",
+      "category": "unanswerable",
+      "question": "这个项目目前有多少日活跃用户？",
+      "expected": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable-model-price",
+      "category": "unanswerable",
+      "question": "项目当前调用模型每一百万 Token 的实时价格是多少？",
+      "expected": {
+        "answerable": false
+      }
+    },
+    {
+      "id": "unanswerable-deployment-domain",
+      "category": "unanswerable",
+      "question": "Flow-Chat 已上线的公网域名是什么？",
+      "expected": {
+        "answerable": false
+      }
+    }
+  ]
+}

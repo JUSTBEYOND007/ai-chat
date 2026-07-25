@@ -1,11 +1,13 @@
 import {
   BookOutlined,
   DatabaseOutlined,
+  DeleteOutlined,
   FileSearchOutlined,
   InboxOutlined,
+  ReloadOutlined,
   SendOutlined
 } from '@ant-design/icons'
-import { Alert, Button, Card, Empty, Input, InputNumber, Select, Space, Spin, Tag, Typography, Upload } from 'antd'
+import { Alert, Button, Card, Empty, Input, InputNumber, Popconfirm, Select, Space, Spin, Tag, Typography, Upload } from 'antd'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { knowledgeApi } from '@pc/apis/knowledge'
@@ -45,6 +47,7 @@ export default function RagKnowledge() {
   const [indexing, setIndexing] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [documentActionId, setDocumentActionId] = useState<string>()
   const [error, setError] = useState<string | null>(null)
   const selectedKnowledgeBaseIdRef = useRef<string>()
 
@@ -189,12 +192,54 @@ export default function RagKnowledge() {
       }
     } catch (err) {
       console.error(err)
+      await loadDocuments(knowledgeBaseId)
       setError('Failed to upload and index the document. Please check file type, model config, or backend logs.')
     } finally {
       setUploading(false)
     }
 
     return false
+  }
+
+  const handleRetryDocument = async (documentId: string) => {
+    if (!selectedKnowledgeBaseId) {
+      return
+    }
+
+    const knowledgeBaseId = selectedKnowledgeBaseId
+    setDocumentActionId(documentId)
+    setError(null)
+
+    try {
+      await knowledgeApi.retryDocument(knowledgeBaseId, documentId)
+      await loadDocuments(knowledgeBaseId)
+    } catch (err) {
+      console.error(err)
+      setError('Failed to retry document indexing. Please check file access and model configuration.')
+    } finally {
+      setDocumentActionId(undefined)
+    }
+  }
+
+  const handleDeleteDocument = async (documentId: string) => {
+    if (!selectedKnowledgeBaseId) {
+      return
+    }
+
+    const knowledgeBaseId = selectedKnowledgeBaseId
+    setDocumentActionId(documentId)
+    setError(null)
+
+    try {
+      await knowledgeApi.deleteDocument(knowledgeBaseId, documentId)
+      setResult(null)
+      await loadDocuments(knowledgeBaseId)
+    } catch (err) {
+      console.error(err)
+      setError('Failed to remove the document from this knowledge base.')
+    } finally {
+      setDocumentActionId(undefined)
+    }
   }
 
   const handleAsk = async (nextQuery = query) => {
@@ -435,7 +480,34 @@ export default function RagKnowledge() {
                           <Text strong ellipsis>
                             {doc.fileName}
                           </Text>
-                          <Tag color={statusColor[doc.status]}>{doc.status}</Tag>
+                          <Space size={4}>
+                            <Tag color={statusColor[doc.status]}>{doc.status}</Tag>
+                            {doc.status === 'failed' && (
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<ReloadOutlined />}
+                                loading={documentActionId === doc.id}
+                                onClick={() => handleRetryDocument(doc.id)}>
+                                Retry
+                              </Button>
+                            )}
+                            <Popconfirm
+                              title="Remove this document?"
+                              description="This removes its chunks and citations from this knowledge base. The uploaded file is kept."
+                              okText="Remove"
+                              cancelText="Cancel"
+                              onConfirm={() => handleDeleteDocument(doc.id)}>
+                              <Button
+                                danger
+                                type="text"
+                                size="small"
+                                icon={<DeleteOutlined />}
+                                loading={documentActionId === doc.id}>
+                                Remove
+                              </Button>
+                            </Popconfirm>
+                          </Space>
                         </div>
                         <Space size={6} wrap>
                           <Tag

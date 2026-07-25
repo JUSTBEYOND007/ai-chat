@@ -1,4 +1,11 @@
 import type { EventSourcePolyfill } from 'event-source-polyfill'
+import type {
+  AgentStreamEvent,
+  ChatAgentStep,
+  ChatContextUsage,
+  ChatToolCall
+} from '@pc/types/chat'
+import type { KnowledgeSource } from '@pc/types/rag'
 
 export type StreamStatus = 'idle' | 'connecting' | 'streaming' | 'recovering' | 'completed' | 'aborted' | 'error'
 
@@ -15,9 +22,19 @@ export type StreamChatClientOptions = {
   flushInterval?: number
   maxReconnectAttempts?: number
   onChunk: (chunk: string) => void
-  onComplete?: (content: string) => void
+  onAgentEvent?: (event: AgentStreamEvent) => void
+  onComplete?: (content: string, metadata?: StreamCompleteMetadata) => void
   onError?: (error: unknown) => void
   onStatusChange?: (status: StreamStatus) => void
+}
+
+export type StreamCompleteMetadata = {
+  generationId?: string
+  knowledgeBaseId?: string
+  sources?: KnowledgeSource[]
+  toolCalls?: ChatToolCall[]
+  agentSteps?: ChatAgentStep[]
+  contextUsage?: ChatContextUsage
 }
 
 type StreamMessage =
@@ -26,12 +43,19 @@ type StreamMessage =
       content: string
       generationId?: string
       seq?: number
+      timestamp?: number
     }
   | {
       type: 'complete'
       content: string
       generationId?: string
       seq?: number
+      timestamp?: number
+      knowledgeBaseId?: string
+      sources?: KnowledgeSource[]
+      toolCalls?: ChatToolCall[]
+      agentSteps?: ChatAgentStep[]
+      contextUsage?: ChatContextUsage
     }
   | {
       type: 'error'
@@ -39,7 +63,9 @@ type StreamMessage =
       content?: string
       generationId?: string
       seq?: number
+      timestamp?: number
     }
+  | AgentStreamEvent
 
 export class StreamChatClient {
   private eventSource: EventSource | EventSourcePolyfill | null = null
@@ -177,11 +203,34 @@ export class StreamChatClient {
       return
     }
 
+    if (
+      data.type === 'generation_start' ||
+      data.type === 'planning' ||
+      data.type === 'tool_start' ||
+      data.type === 'tool_result'
+    ) {
+      this.options.onAgentEvent?.(data)
+      return
+    }
+
+    if (data.type === 'answer_chunk') {
+      this.options.onAgentEvent?.(data)
+      this.addToRenderBuffer(data.content || '')
+      return
+    }
+
     if (data.type === 'complete') {
       this.flushAll()
       this.fullContent = data.content || this.fullContent
       this.setStatus('completed')
-      this.options.onComplete?.(this.fullContent)
+      this.options.onComplete?.(this.fullContent, {
+        generationId: data.generationId,
+        knowledgeBaseId: data.knowledgeBaseId,
+        sources: data.sources,
+        toolCalls: data.toolCalls,
+        agentSteps: data.agentSteps,
+        contextUsage: data.contextUsage
+      })
       this.close()
       return
     }

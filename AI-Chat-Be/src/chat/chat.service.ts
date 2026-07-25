@@ -11,21 +11,40 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 
-import { FileContent, Message, MessageRole } from './entities/message.entity';
+import {
+  FileContent,
+  Message,
+  MessageAgentStep,
+  MessageContextUsage,
+  MessageRole,
+  MessageSource,
+  MessageStatus,
+  MessageToolCall,
+} from './entities/message.entity';
 import { Chat } from './entities/chat.entity';
 
 import { AiService } from 'src/ai/ai.service';
 import { FileService } from 'src/file/file.service';
+import { AgentRunner } from 'src/agent-runtime/runner/agent-runner.service';
+import {
+  AgentHistoryMessage,
+  AgentMemorySummary,
+  AgentRunError,
+  AgentRuntimeEvent,
+  AgentToolExecutionResult,
+} from 'src/agent-runtime/contracts';
 
 import { UpdateTitleDto } from './dto/update-title.dto';
 import { SearchChatDto } from './dto/search-chat.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { ChatMemoryService } from './services/chat-memory.service';
 
 type StreamEventPayload =
   | {
       type: 'chunk';
       generationId: string;
       seq: number;
+      timestamp: number;
       content: string;
       isComplete: false;
     }
@@ -33,16 +52,26 @@ type StreamEventPayload =
       type: 'complete';
       generationId: string;
       seq: number;
+      timestamp: number;
       content: string;
       isComplete: true;
+      knowledgeBaseId?: string;
+      sources?: MessageSource[];
+      toolCalls?: MessageToolCall[];
+      agentSteps?: MessageAgentStep[];
+      contextUsage?: MessageContextUsage;
     }
   | {
       type: 'error';
       generationId?: string;
       seq?: number;
+      timestamp: number;
       content: string;
       isComplete: true;
-    };
+    }
+  | (AgentRuntimeEvent & {
+      seq: number;
+    });
 
 type StreamGenerationCache = {
   chatId: string;
@@ -60,6 +89,15 @@ export type SendMessageResult =
       messageId: string;
     };
 
+type MessageMetadata = {
+  knowledgeBaseId?: string;
+  sources?: MessageSource[];
+  toolCalls?: MessageToolCall[];
+  agentSteps?: MessageAgentStep[];
+  contextUsage?: MessageContextUsage;
+  status?: MessageStatus;
+};
+
 @Injectable()
 export class ChatService {
   private chatSubjects = new Map<string, Subject<MessageEvent>>();
@@ -73,6 +111,12 @@ export class ChatService {
 
   @Inject(AiService)
   private aiService: AiService;
+
+  @Inject(AgentRunner)
+  private agentRunner: AgentRunner;
+
+  @Inject(ChatMemoryService)
+  private chatMemoryService: ChatMemoryService;
 
   @InjectRepository(Chat)
   private chatRepository: Repository<Chat>;
@@ -124,8 +168,11 @@ export class ChatService {
     imgUrl,
     fileId,
     clientMessageId,
+    knowledgeBaseId,
     regenerate,
-  }: SendMessageDto): Promise<SendMessageResult> {
+  }: SendMessageDto, userId: number): Promise<SendMessageResult> {
+    await this.assertChatOwner(id, userId);
+
     const generationId = randomUUID();
     const generation: StreamGenerationCache = {
       chatId: id,
@@ -133,6 +180,13 @@ export class ChatService {
       events: [],
     };
     this.streamGenerations.set(generationId, generation);
+
+    let fullContent = '';
+    let seq = 0;
+    let sources: MessageSource[] | undefined;
+    let toolCalls: MessageToolCall[] | undefined;
+    let agentSteps: MessageAgentStep[] | undefined;
+    let contextUsage: MessageContextUsage | undefined;
 
     try {
       let filePath = '';
@@ -170,50 +224,138 @@ export class ChatService {
         };
       }
 
+      const useAgent = !filePath || Boolean(knowledgeBaseId);
+      let agentHistory: AgentHistoryMessage[] | undefined;
+      let memorySummary: AgentMemorySummary | undefined;
+      if (useAgent) {
+        [agentHistory, memorySummary] = await Promise.all([
+          this.loadAgentHistory(id),
+          this.chatMemoryService
+            .getSummary(id, knowledgeBaseId)
+            .catch((error) => {
+              this.logger.warn(
+                `Failed to load chat memory ${id}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
+              return undefined;
+            }),
+        ]);
+      }
+
+      let userMessageId = existingUserMessage?.id;
       if (!existingUserMessage) {
-        await this.saveMessage(
+        const savedUserMessage = await this.saveMessage(
           id,
           message,
           MessageRole.USER,
           imgUrl,
           fileContent,
           clientMessageId,
+          { knowledgeBaseId },
         );
+        userMessageId = savedUserMessage.id;
       }
 
-      const completion = await this.aiService.getMain(message, filePath, imgUrl);
-
-      let fullContent = '';
-      let seq = 0;
-      for await (const chunk of completion) {
-        if (Array.isArray(chunk.choices) && chunk.choices.length > 0) {
-          const content = chunk.choices[0].delta.content || '';
-          if (!content) {
-            continue;
-          }
-
-          fullContent += content;
-          seq += 1;
-          this.sendGenerationEvent(id, generation, {
-            type: 'chunk',
+      if (useAgent) {
+        const agentResult = await this.agentRunner.run({
+          message,
+          history: agentHistory,
+          summary: memorySummary,
+          context: {
+            userId,
+            chatId: id,
             generationId,
-            seq,
-            content,
-            isComplete: false,
-          });
+            messageId: userMessageId,
+            clientMessageId,
+            knowledgeBaseId,
+          },
+          onEvent: (event) => {
+            if (event.type === 'answer_chunk') {
+              fullContent += event.content;
+            }
+            seq += 1;
+            this.sendGenerationEvent(id, generation, {
+              ...event,
+              seq,
+            });
+          },
+        });
+        fullContent = agentResult.answer || fullContent;
+        toolCalls = this.mapAgentToolCalls(agentResult.toolResults);
+        sources = this.extractAgentSources(agentResult.toolResults);
+        agentSteps = agentResult.steps;
+        contextUsage = agentResult.contextUsage;
+      } else {
+        const completion = await this.aiService.getMain(message, filePath, imgUrl);
+
+        for await (const chunk of completion) {
+          if (Array.isArray(chunk.choices) && chunk.choices.length > 0) {
+            const content = chunk.choices[0].delta.content || '';
+            if (!content) {
+              continue;
+            }
+
+            fullContent += content;
+            seq += 1;
+            this.sendGenerationEvent(id, generation, {
+              type: 'chunk',
+              generationId,
+              seq,
+              timestamp: Date.now(),
+              content,
+              isComplete: false,
+            });
+          }
         }
       }
 
       seq += 1;
-      this.sendGenerationEvent(id, generation, {
+      const completeEvent: Extract<StreamEventPayload, { type: 'complete' }> = {
         type: 'complete',
         generationId,
         seq,
+        timestamp: Date.now(),
         content: fullContent,
         isComplete: true,
-      });
+      };
+      if (knowledgeBaseId || toolCalls?.length) {
+        completeEvent.knowledgeBaseId = knowledgeBaseId;
+        completeEvent.sources = sources;
+        completeEvent.toolCalls = toolCalls;
+      }
+      completeEvent.agentSteps = agentSteps;
+      completeEvent.contextUsage = contextUsage;
+      this.sendGenerationEvent(id, generation, completeEvent);
 
-      await this.saveMessage(id, fullContent, MessageRole.SYSTEM);
+      await this.saveMessage(
+        id,
+        fullContent,
+        MessageRole.SYSTEM,
+        undefined,
+        undefined,
+        undefined,
+        {
+          knowledgeBaseId,
+          sources,
+          toolCalls,
+          agentSteps,
+          contextUsage,
+          status: MessageStatus.COMPLETED,
+        },
+      );
+
+      if (useAgent) {
+        await this.chatMemoryService
+          .refreshSummary(id, knowledgeBaseId)
+          .catch((error) => {
+            this.logger.warn(
+              `Failed to schedule chat memory ${id}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+      }
 
       this.logger.log(`Chat ${id} response completed`);
 
@@ -224,15 +366,40 @@ export class ChatService {
     } catch (error) {
       this.logger.error(`Chat ${id} failed: ${error}`);
 
+      if (error instanceof AgentRunError && error.partialResult) {
+        toolCalls = this.mapAgentToolCalls(error.partialResult.toolResults);
+        sources = this.extractAgentSources(error.partialResult.toolResults);
+        agentSteps = error.partialResult.steps;
+        contextUsage = error.partialResult.contextUsage;
+      }
+
+      const errorContent = fullContent || '回复失败，请稍后重试。';
+      await this.saveMessage(
+        id,
+        errorContent,
+        MessageRole.SYSTEM,
+        undefined,
+        undefined,
+        undefined,
+        {
+          knowledgeBaseId,
+          sources,
+          toolCalls,
+          agentSteps,
+          contextUsage,
+          status: MessageStatus.FAILED,
+        },
+      );
+
       const errorEvent: StreamEventPayload = {
         type: 'error',
         generationId,
-        seq: generation.events.length + 1,
+        seq: seq + 1,
+        timestamp: Date.now(),
         content: `Error: ${error || 'Unknown error'}`,
         isComplete: true,
       };
-      generation.events.push(errorEvent);
-      this.sendMessageToChat(id, errorEvent);
+      this.sendGenerationEvent(id, generation, errorEvent);
 
       this.logger.log(
         'Reference: https://help.aliyun.com/zh/model-studio/developer-reference/error-code',
@@ -252,6 +419,7 @@ export class ChatService {
     imgUrl?: string[],
     fileContent?: FileContent[],
     clientMessageId?: string,
+    metadata: MessageMetadata = {},
   ) {
     const message = this.messageRepository.create({
       chatId,
@@ -260,6 +428,12 @@ export class ChatService {
       imgUrl,
       fileContent,
       clientMessageId,
+      knowledgeBaseId: metadata.knowledgeBaseId,
+      sources: metadata.sources,
+      toolCalls: metadata.toolCalls,
+      agentSteps: metadata.agentSteps,
+      contextUsage: metadata.contextUsage,
+      status: metadata.status ?? MessageStatus.COMPLETED,
     });
 
     return await this.messageRepository.save(message);
@@ -270,6 +444,115 @@ export class ChatService {
       where: { chatId },
       order: { createdAt: 'ASC' },
     });
+  }
+
+  private async assertChatOwner(chatId: string, userId: number) {
+    const chat = await this.chatRepository.findOne({
+      where: { id: chatId, userId, isActive: true },
+    });
+
+    if (!chat) {
+      throw new HttpException('Chat not found or access denied', HttpStatus.NOT_FOUND);
+    }
+  }
+
+  private mapAgentToolCalls(
+    results: AgentToolExecutionResult[],
+  ): MessageToolCall[] | undefined {
+    if (results.length === 0) {
+      return undefined;
+    }
+
+    return results.map((result) => {
+      const query = this.getStringProperty(result.input, 'query');
+      const sources =
+        result.status === 'completed'
+          ? this.getKnowledgeSources(result.output)
+          : undefined;
+
+      return {
+        toolCallId: result.toolCallId,
+        name: result.toolName,
+        status: result.status,
+        input: result.input,
+        output: result.status === 'completed' ? result.output : undefined,
+        error: result.status === 'failed' ? result.error : undefined,
+        startedAt: result.startedAt,
+        completedAt: result.completedAt,
+        durationMs: result.durationMs,
+        query,
+        resultCount: sources?.length,
+      };
+    });
+  }
+
+  private extractAgentSources(
+    results: AgentToolExecutionResult[],
+  ): MessageSource[] | undefined {
+    const sourceMap = new Map<string, MessageSource>();
+
+    for (const result of results) {
+      if (
+        result.status !== 'completed' ||
+        result.toolName !== 'knowledge_search'
+      ) {
+        continue;
+      }
+
+      for (const source of this.getKnowledgeSources(result.output) || []) {
+        sourceMap.set(`${source.documentId}:${source.chunkIndex}`, source);
+      }
+    }
+
+    return sourceMap.size > 0 ? [...sourceMap.values()] : undefined;
+  }
+
+  private getKnowledgeSources(output: unknown): MessageSource[] | undefined {
+    if (!output || typeof output !== 'object' || !('sources' in output)) {
+      return undefined;
+    }
+
+    const sources = (output as { sources?: unknown }).sources;
+    return Array.isArray(sources) ? (sources as MessageSource[]) : undefined;
+  }
+
+  private getStringProperty(value: unknown, property: string) {
+    if (!value || typeof value !== 'object' || !(property in value)) {
+      return undefined;
+    }
+
+    const propertyValue = (value as Record<string, unknown>)[property];
+    return typeof propertyValue === 'string' ? propertyValue : undefined;
+  }
+
+  private async loadAgentHistory(chatId: string): Promise<AgentHistoryMessage[]> {
+    const messages = await this.messageRepository.find({
+      where: {
+        chatId,
+        status: MessageStatus.COMPLETED,
+      },
+      order: { createdAt: 'DESC' },
+      take: 50,
+    });
+
+    return messages.map((item) => ({
+      id: item.id,
+      clientMessageId: item.clientMessageId,
+      role:
+        item.role === MessageRole.USER
+          ? ('user' as const)
+          : ('assistant' as const),
+      content: item.content,
+      createdAt: item.createdAt.getTime(),
+      status:
+        item.status === MessageStatus.COMPLETED ? 'completed' : 'failed',
+      knowledgeBaseId: item.knowledgeBaseId,
+      toolCalls: item.toolCalls?.map((toolCall) => ({
+        name: toolCall.name,
+        status: toolCall.status,
+        resultCount: toolCall.resultCount,
+      })),
+    }));
   }
 
   async createChat({

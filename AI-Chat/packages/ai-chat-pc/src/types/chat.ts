@@ -31,8 +31,126 @@ export type SendMessageType = {
   // imgUrl?: string[]
   fileId?: string
   clientMessageId?: string
+  knowledgeBaseId?: string
   regenerate?: boolean
 }
+
+export type ChatToolCall = {
+  toolCallId?: string
+  name: string
+  status: 'completed' | 'failed'
+  input?: unknown
+  output?: unknown
+  error?: {
+    code: string
+    message: string
+  }
+  startedAt?: number
+  completedAt?: number
+  durationMs?: number
+  query?: string
+  resultCount?: number
+}
+
+export type AgentStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'interrupted'
+
+export type ChatAgentStep = {
+  stepId: string
+  type: 'planning' | 'tool' | 'answer'
+  status: AgentStepStatus
+  round?: number
+  startedAt: number
+  completedAt?: number
+  toolCallId?: string
+  toolName?: string
+  input?: unknown
+  output?: unknown
+  error?: {
+    code: string
+    message: string
+  }
+  durationMs?: number
+  message?: string
+}
+
+export type ChatContextUsage = {
+  inputBudgetTokens: number
+  responseReserveTokens: number
+  estimatedInputTokens: number
+  systemTokens: number
+  currentMessageTokens: number
+  summaryTokens: number
+  historyTokens: number
+  includedHistoryMessages: number
+  droppedHistoryMessages: number
+  truncatedHistoryMessages: number
+  toolResultBudgetTokens: number
+  usedSummary: boolean
+  summarizedMessageCount?: number
+  summaryUpdatedAt?: number
+  overBudget: boolean
+}
+
+export type ChatToolExecutionResult = {
+  toolCallId: string
+  toolName: string
+  status: 'completed' | 'failed'
+  input: unknown
+  output?: unknown
+  error?: {
+    code: string
+    message: string
+  }
+  startedAt: number
+  completedAt: number
+  durationMs: number
+}
+
+type AgentStreamEventBase = {
+  generationId: string
+  seq?: number
+  timestamp: number
+}
+
+export type AgentStreamEvent =
+  | (AgentStreamEventBase & {
+      type: 'generation_start'
+      availableTools: string[]
+      contextUsage: ChatContextUsage
+    })
+  | (AgentStreamEventBase & {
+      type: 'planning'
+      round: number
+      status: 'running' | 'completed' | 'failed'
+      startedAt: number
+      durationMs?: number
+      message?: string
+      error?: {
+        code: string
+        message: string
+      }
+    })
+  | (AgentStreamEventBase & {
+      type: 'tool_start'
+      round: number
+      toolCallId: string
+      toolName: string
+      input: unknown
+    })
+  | (AgentStreamEventBase & {
+      type: 'tool_result'
+      round: number
+      result: ChatToolExecutionResult
+    })
+  | (AgentStreamEventBase & {
+      type: 'answer_chunk'
+      content: string
+    })
 
 export interface ImageContent {
   type: 'image'

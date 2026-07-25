@@ -1,4 +1,4 @@
-import { IsNotEmpty } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsUUID } from 'class-validator';
 
 export class SendMessageDto {
   @IsNotEmpty({
@@ -16,6 +16,10 @@ export class SendMessageDto {
   fileId?: string;
 
   clientMessageId?: string;
+
+  @IsOptional()
+  @IsUUID('4', { message: 'knowledgeBaseId格式不正确' })
+  knowledgeBaseId?: string;
 
   regenerate?: boolean;
 }

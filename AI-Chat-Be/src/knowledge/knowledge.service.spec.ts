@@ -10,6 +10,7 @@ import {
   KnowledgeDocument,
   KnowledgeDocumentStatus,
 } from './entities/knowledge-document.entity';
+import { KNOWLEDGE_MAX_FILE_SIZE } from './knowledge.constants';
 import { KnowledgeService } from './knowledge.service';
 
 describe('KnowledgeService focused behavior', () => {
@@ -88,6 +89,92 @@ describe('KnowledgeService focused behavior', () => {
     expect(() => (service as any).assertEmbeddingDimension([0.1, 0.2])).toThrow(
       'embedding 维度不一致，期望 3，实际 2',
     );
+  });
+
+  it('rejects unsupported knowledge document extensions', () => {
+    expect(() =>
+      (service as any).assertDocumentFileSupported(
+        'archive.exe',
+        'application/octet-stream',
+      ),
+    ).toThrow('暂不支持的文档类型: .exe');
+  });
+
+  it('rejects knowledge tool searches outside the current user ownership', async () => {
+    repositoryMock.findOne.mockResolvedValueOnce(null);
+
+    await expect(
+      service.searchForTool('knowledge-base-id', 'private query', 5, 42),
+    ).rejects.toThrow('知识库不存在或无权访问');
+    expect(dataSourceMock.query).not.toHaveBeenCalled();
+  });
+
+  it('rejects uploaded documents that exceed the size limit before writing them', async () => {
+    const writeFileSpy = jest.spyOn(fs.promises, 'writeFile');
+
+    await expect(
+      service.indexUploadedDocument(
+        'kb-id',
+        {
+          originalname: 'large.md',
+          mimetype: 'text/markdown',
+          buffer: Buffer.alloc(KNOWLEDGE_MAX_FILE_SIZE + 1),
+        },
+        42,
+      ),
+    ).rejects.toThrow(
+      `文件大小不能超过 ${KNOWLEDGE_MAX_FILE_SIZE / 1024 / 1024}MB`,
+    );
+    expect(writeFileSpy).not.toHaveBeenCalled();
+  });
+
+  it('retries only a failed document in the owned knowledge base', async () => {
+    const document = {
+      id: 'document-id',
+      knowledgeBaseId: 'kb-id',
+      status: KnowledgeDocumentStatus.FAILED,
+      chunkCount: 3,
+      errorMessage: 'previous failure',
+    } as KnowledgeDocument;
+    repositoryMock.findOne
+      .mockResolvedValueOnce({ id: 'kb-id', userId: 42, isActive: true })
+      .mockResolvedValueOnce(document);
+    repositoryMock.save.mockResolvedValue(document);
+    const reindexSpy = jest
+      .spyOn(service as any, 'indexExistingDocument')
+      .mockResolvedValue({
+        documentId: 'document-id',
+        status: KnowledgeDocumentStatus.INDEXED,
+        chunkCount: 2,
+      });
+
+    await expect(service.retryDocument('kb-id', 'document-id', 42)).resolves.toEqual({
+      documentId: 'document-id',
+      status: KnowledgeDocumentStatus.INDEXED,
+      chunkCount: 2,
+    });
+    expect(document).toMatchObject({
+      status: KnowledgeDocumentStatus.PENDING,
+      chunkCount: 0,
+      errorMessage: null,
+    });
+    expect(reindexSpy).toHaveBeenCalledWith(document);
+  });
+
+  it('deletes an owned document and its indexed chunks', async () => {
+    repositoryMock.findOne
+      .mockResolvedValueOnce({ id: 'kb-id', userId: 42, isActive: true })
+      .mockResolvedValueOnce({ id: 'document-id', knowledgeBaseId: 'kb-id' });
+
+    await expect(service.deleteDocument('kb-id', 'document-id', 42)).resolves.toEqual({
+      documentId: 'document-id',
+      deleted: true,
+    });
+    expect(repositoryMock.delete).toHaveBeenCalledWith({
+      id: 'document-id',
+      knowledgeBaseId: 'kb-id',
+    });
+    expect(repositoryMock.delete).toHaveBeenCalledWith({ documentId: 'document-id' });
   });
 
   it('rejects uploads paths that resolve outside the uploads directory', async () => {
@@ -200,5 +287,61 @@ describe('KnowledgeService focused behavior', () => {
       expect.stringContaining('AND kd.status = $4'),
       ['[0.1,0.2,0.3]', 'kb-id', 5, 'indexed'],
     );
+  });
+
+  it('returns a future-ready vector retrieval trace for evaluation', async () => {
+    dataSourceMock.query.mockResolvedValue([
+      {
+        id: 'chunk-1',
+        documentId: 'doc-1',
+        knowledgeBaseId: 'kb-id',
+        chunkIndex: 2,
+        content: 'Generation ID and sequence numbers support SSE replay.',
+        tokenCount: 12,
+        metadata: { section: 'streaming' },
+        fileName: 'stream-reliability.md',
+        score: '0.91',
+      },
+    ]);
+
+    const trace = await service.searchKnowledgeBaseWithTrace(
+      'kb-id',
+      'How does replay work?',
+      3,
+    );
+
+    expect(trace).toMatchObject({
+      version: '1.0',
+      strategy: 'vector_baseline',
+      knowledgeBaseId: 'kb-id',
+      originalQuery: 'How does replay work?',
+      effectiveQuery: 'How does replay work?',
+      topK: 3,
+      candidates: [
+        {
+          candidateId: 'chunk-1',
+          fileName: 'stream-reliability.md',
+          channels: [{ channel: 'vector', rank: 1, score: 0.91 }],
+          finalRank: 1,
+          finalScore: 0.91,
+          selected: true,
+          filterReasons: [],
+        },
+      ],
+    });
+    expect(trace.timings).toEqual({
+      embeddingMs: expect.any(Number),
+      vectorSearchMs: expect.any(Number),
+      totalMs: expect.any(Number),
+    });
+  });
+
+  it('protects retrieval debug traces with knowledge-base ownership', async () => {
+    repositoryMock.findOne.mockResolvedValueOnce(null);
+
+    await expect(
+      service.searchForDebug('kb-id', 'query', 5, 42),
+    ).rejects.toThrow('知识库不存在或无权访问');
+    expect(dataSourceMock.query).not.toHaveBeenCalled();
   });
 });

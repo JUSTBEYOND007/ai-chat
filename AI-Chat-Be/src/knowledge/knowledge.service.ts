@@ -22,6 +22,16 @@ import {
   KnowledgeDocumentStatus,
 } from './entities/knowledge-document.entity';
 import { KnowledgeChunk } from './entities/knowledge-chunk.entity';
+import {
+  getKnowledgeDocumentExtension,
+  isKnowledgeDocumentMimeTypeAllowed,
+  KNOWLEDGE_MAX_FILE_SIZE,
+  KNOWLEDGE_SUPPORTED_EXTENSIONS,
+} from './knowledge.constants';
+import {
+  RetrievalCandidate,
+  RetrievalTrace,
+} from './contracts/retrieval';
 
 interface UploadedKnowledgeFile {
   originalname: string;
@@ -29,7 +39,7 @@ interface UploadedKnowledgeFile {
   buffer: Buffer;
 }
 
-interface RetrievedChunk {
+export interface RetrievedChunk {
   id: string;
   documentId: string;
   knowledgeBaseId: string;
@@ -38,6 +48,28 @@ interface RetrievedChunk {
   metadata?: Record<string, any>;
   fileName: string;
   score: number;
+  tokenCount?: number;
+}
+
+export interface KnowledgeSource {
+  documentId: string;
+  fileName: string;
+  chunkIndex: number;
+  content: string;
+  score: number;
+}
+
+export interface KnowledgeToolCall {
+  name: 'knowledge_search';
+  status: 'completed';
+  query: string;
+  resultCount: number;
+}
+
+export interface KnowledgeStreamResult {
+  stream: AsyncIterable<{ content: unknown }>;
+  sources: KnowledgeSource[];
+  toolCalls: KnowledgeToolCall[];
 }
 
 @Injectable()
@@ -117,6 +149,10 @@ export class KnowledgeService implements OnModuleInit {
     userId: number,
   ) {
     await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
+    this.assertDocumentFileSupported(
+      indexDocumentDto.fileName || indexDocumentDto.filePath,
+      indexDocumentDto.mimeType,
+    );
 
     const document = this.knowledgeDocumentRepository.create({
       ...indexDocumentDto,
@@ -126,11 +162,72 @@ export class KnowledgeService implements OnModuleInit {
     });
     const savedDocument = await this.knowledgeDocumentRepository.save(document);
 
+    return await this.indexExistingDocument(savedDocument);
+  }
+
+  async retryDocument(
+    knowledgeBaseId: string,
+    documentId: string,
+    userId: number,
+  ) {
+    await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
+
+    const document = await this.knowledgeDocumentRepository.findOne({
+      where: { id: documentId, knowledgeBaseId },
+    });
+
+    if (!document) {
+      throw new HttpException('知识库文档不存在', HttpStatus.NOT_FOUND);
+    }
+
+    if (document.status !== KnowledgeDocumentStatus.FAILED) {
+      throw new HttpException(
+        '只有入库失败的文档可以重试',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    document.status = KnowledgeDocumentStatus.PENDING;
+    document.chunkCount = 0;
+    document.errorMessage = null;
+    const savedDocument = await this.knowledgeDocumentRepository.save(document);
+
+    return await this.indexExistingDocument(savedDocument);
+  }
+
+  async deleteDocument(
+    knowledgeBaseId: string,
+    documentId: string,
+    userId: number,
+  ) {
+    await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
+
+    const document = await this.knowledgeDocumentRepository.findOne({
+      where: { id: documentId, knowledgeBaseId },
+    });
+
+    if (!document) {
+      throw new HttpException('知识库文档不存在', HttpStatus.NOT_FOUND);
+    }
+
+    await this.knowledgeChunkRepository.delete({ documentId });
+    await this.knowledgeDocumentRepository.delete({
+      id: documentId,
+      knowledgeBaseId,
+    });
+
+    return {
+      documentId,
+      deleted: true,
+    };
+  }
+
+  private async indexExistingDocument(savedDocument: KnowledgeDocument) {
     try {
       savedDocument.status = KnowledgeDocumentStatus.PARSING;
       await this.knowledgeDocumentRepository.save(savedDocument);
 
-      const text = await this.extractTextFromFile(indexDocumentDto.filePath);
+      const text = await this.extractTextFromFile(savedDocument.filePath);
       if (!text.trim()) {
         throw new Error('文档没有解析出可用文本');
       }
@@ -151,7 +248,7 @@ export class KnowledgeService implements OnModuleInit {
         const chunk = await this.knowledgeChunkRepository.save(
           this.knowledgeChunkRepository.create({
             documentId: savedDocument.id,
-            knowledgeBaseId,
+            knowledgeBaseId: savedDocument.knowledgeBaseId,
             chunkIndex: i,
             content,
             tokenCount: this.estimateTokenCount(content),
@@ -207,6 +304,15 @@ export class KnowledgeService implements OnModuleInit {
     }
 
     const safeFileName = this.getSafeUploadFileName(file.originalname);
+    this.assertDocumentFileSupported(safeFileName, file.mimetype);
+
+    if (file.buffer.length > KNOWLEDGE_MAX_FILE_SIZE) {
+      throw new HttpException(
+        `文件大小不能超过 ${KNOWLEDGE_MAX_FILE_SIZE / 1024 / 1024}MB`,
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
+    }
+
     const storedFileName = `${Date.now()}-${Math.random()
       .toString(36)
       .slice(2, 8)}-${safeFileName}`;
@@ -261,41 +367,49 @@ export class KnowledgeService implements OnModuleInit {
       };
     }
 
-    const context = chunks
-      .map(
-        (chunk, index) =>
-          `资料 ${index + 1}:\n文件: ${chunk.fileName}\n片段: ${chunk.content}`,
-      )
-      .join('\n\n');
-
-    const prompt = `你是一个严谨的知识库问答助手。请只根据给定资料回答问题。
-如果资料中没有答案，请明确说明知识库中没有找到相关信息。
-
-资料：
-${context}
-
-问题：
-${ragQueryDto.query}
-
-回答要求：
-1. 使用中文回答。
-2. 不要编造资料中没有的信息。
-3. 尽量简洁。`;
+    const prompt = this.buildRagPrompt(chunks, ragQueryDto.query);
 
     const response = await this.llm.invoke(prompt);
     const answer = String(response.content || '无法生成回答');
 
     return {
       answer,
-      sources: chunks.map((chunk) => ({
-        documentId: chunk.documentId,
-        fileName: chunk.fileName,
-        chunkIndex: chunk.chunkIndex,
-        content: chunk.content.slice(0, 300),
-        score: Number(chunk.score),
-      })),
+      sources: this.toSources(chunks),
       query: ragQueryDto.query,
       knowledgeBaseId,
+    };
+  }
+
+  async streamQuery(
+    knowledgeBaseId: string,
+    query: string,
+    userId: number,
+  ): Promise<KnowledgeStreamResult> {
+    await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
+
+    const chunks = await this.searchKnowledgeBase(knowledgeBaseId, query);
+    const sources = this.toSources(chunks);
+    const toolCalls: KnowledgeToolCall[] = [
+      {
+        name: 'knowledge_search',
+        status: 'completed',
+        query,
+        resultCount: sources.length,
+      },
+    ];
+
+    if (chunks.length === 0) {
+      return {
+        stream: this.createTextStream('知识库中没有找到相关信息。'),
+        sources,
+        toolCalls,
+      };
+    }
+
+    return {
+      stream: await this.llm.stream(this.buildRagPrompt(chunks, query)),
+      sources,
+      toolCalls,
     };
   }
 
@@ -304,10 +418,38 @@ ${ragQueryDto.query}
     query: string,
     topK = 5,
   ): Promise<RetrievedChunk[]> {
+    const trace = await this.searchKnowledgeBaseWithTrace(
+      knowledgeBaseId,
+      query,
+      topK,
+    );
+
+    return trace.candidates.map((candidate) => ({
+      id: candidate.candidateId,
+      documentId: candidate.documentId,
+      knowledgeBaseId: candidate.knowledgeBaseId,
+      chunkIndex: candidate.chunkIndex,
+      content: candidate.content,
+      metadata: candidate.metadata,
+      fileName: candidate.fileName,
+      score: candidate.finalScore,
+      tokenCount: candidate.tokenCount,
+    }));
+  }
+
+  async searchKnowledgeBaseWithTrace(
+    knowledgeBaseId: string,
+    query: string,
+    topK = 5,
+  ): Promise<RetrievalTrace> {
+    const totalStartedAt = Date.now();
+    const embeddingStartedAt = Date.now();
     const embedding = await this.embeddings.embedQuery(query);
+    const embeddingMs = Date.now() - embeddingStartedAt;
     this.assertEmbeddingDimension(embedding);
     const vector = this.toPgVector(embedding);
 
+    const vectorSearchStartedAt = Date.now();
     const rows = (await this.dataSource.query(
       `
         SELECT
@@ -316,6 +458,7 @@ ${ragQueryDto.query}
           kc."knowledgeBaseId",
           kc."chunkIndex",
           kc.content,
+          kc."tokenCount",
           kc.metadata,
           kd."fileName",
           1 - (kc.embedding <=> $1::vector) AS score
@@ -329,8 +472,67 @@ ${ragQueryDto.query}
       `,
       [vector, knowledgeBaseId, topK, KnowledgeDocumentStatus.INDEXED],
     )) as RetrievedChunk[];
+    const vectorSearchMs = Date.now() - vectorSearchStartedAt;
 
-    return rows;
+    const candidates: RetrievalCandidate[] = rows.map((row, index) => ({
+      candidateId: row.id,
+      documentId: row.documentId,
+      knowledgeBaseId: row.knowledgeBaseId,
+      fileName: row.fileName,
+      chunkIndex: Number(row.chunkIndex),
+      content: row.content,
+      tokenCount:
+        row.tokenCount === undefined ? undefined : Number(row.tokenCount),
+      metadata: row.metadata,
+      channels: [
+        {
+          channel: 'vector',
+          rank: index + 1,
+          score: Number(row.score),
+        },
+      ],
+      finalRank: index + 1,
+      finalScore: Number(row.score),
+      selected: true,
+      filterReasons: [],
+    }));
+
+    return {
+      version: '1.0',
+      strategy: 'vector_baseline',
+      knowledgeBaseId,
+      originalQuery: query,
+      effectiveQuery: query,
+      topK,
+      candidates,
+      timings: {
+        embeddingMs,
+        vectorSearchMs,
+        totalMs: Date.now() - totalStartedAt,
+      },
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  async searchForTool(
+    knowledgeBaseId: string,
+    query: string,
+    topK: number,
+    userId: number,
+  ): Promise<KnowledgeSource[]> {
+    await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
+    const chunks = await this.searchKnowledgeBase(knowledgeBaseId, query, topK);
+    return this.toSources(chunks);
+  }
+
+  async searchForDebug(
+    knowledgeBaseId: string,
+    query: string,
+    topK: number,
+    userId: number,
+  ): Promise<RetrievalTrace> {
+    await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
+    return this.searchKnowledgeBaseWithTrace(knowledgeBaseId, query, topK);
   }
 
   private async assertKnowledgeBaseOwner(knowledgeBaseId: string, userId: number) {
@@ -343,6 +545,43 @@ ${ragQueryDto.query}
     }
 
     return knowledgeBase;
+  }
+
+  private buildRagPrompt(chunks: RetrievedChunk[], query: string) {
+    const context = chunks
+      .map(
+        (chunk, index) =>
+          `资料 ${index + 1}:\n文件: ${chunk.fileName}\n片段: ${chunk.content}`,
+      )
+      .join('\n\n');
+
+    return `你是一个严谨的知识库问答助手。请只根据给定资料回答问题。
+如果资料中没有答案，请明确说明知识库中没有找到相关信息。
+
+资料：
+${context}
+
+问题：
+${query}
+
+回答要求：
+1. 使用中文回答。
+2. 不要编造资料中没有的信息。
+3. 尽量简洁。`;
+  }
+
+  private toSources(chunks: RetrievedChunk[]): KnowledgeSource[] {
+    return chunks.map((chunk) => ({
+      documentId: chunk.documentId,
+      fileName: chunk.fileName,
+      chunkIndex: chunk.chunkIndex,
+      content: chunk.content.slice(0, 300),
+      score: Number(chunk.score),
+    }));
+  }
+
+  private async *createTextStream(content: string) {
+    yield { content };
   }
 
   private async ensureVectorSchema() {
@@ -385,8 +624,23 @@ ${ragQueryDto.query}
       throw new Error('文件路径非法');
     }
 
-    const extension = path.extname(readPath).toLowerCase();
-    if (extension === '.txt' || extension === '.md') {
+    const stats = await fs.promises.stat(readPath);
+    if (!stats.isFile()) {
+      throw new Error('文件路径不是普通文件');
+    }
+
+    if (stats.size > KNOWLEDGE_MAX_FILE_SIZE) {
+      throw new Error(
+        `文件大小不能超过 ${KNOWLEDGE_MAX_FILE_SIZE / 1024 / 1024}MB`,
+      );
+    }
+
+    const extension = getKnowledgeDocumentExtension(readPath);
+    if (
+      extension === '.txt' ||
+      extension === '.md' ||
+      extension === '.markdown'
+    ) {
       return await fs.promises.readFile(readPath, 'utf8');
     }
 
@@ -403,6 +657,26 @@ ${ragQueryDto.query}
     const normalizedFileName = (fileName || 'document').replace(/\\/g, '/');
     const baseName = path.posix.basename(normalizedFileName).trim();
     return baseName || 'document';
+  }
+
+  private assertDocumentFileSupported(fileName: string, mimeType?: string) {
+    const extension = getKnowledgeDocumentExtension(fileName);
+    const isSupported = KNOWLEDGE_SUPPORTED_EXTENSIONS.some(
+      (supportedExtension) => supportedExtension === extension,
+    );
+    if (!isSupported) {
+      throw new HttpException(
+        `暂不支持的文档类型: ${extension || 'unknown'}`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    if (!isKnowledgeDocumentMimeTypeAllowed(extension, mimeType)) {
+      throw new HttpException(
+        `文件类型与扩展名不匹配: ${mimeType}`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
   }
 
   private resolveLocalFilePath(filePath: string): string {

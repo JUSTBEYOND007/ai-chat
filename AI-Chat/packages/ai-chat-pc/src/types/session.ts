@@ -1,3 +1,5 @@
+import type { ChatAgentStep, ChatContextUsage, ChatToolCall } from './chat'
+
 // 定义会话对象类型
 export interface ChatSession {
   id: string // 注意：接口文档中id是string类型，而之前我们前端使用的是number，这里统一为string
@@ -22,4 +24,18 @@ export interface ChatMessage {
         fileName: string
       }[]
     | null
+  knowledgeBaseId?: string | null
+  agentSteps?: ChatAgentStep[] | null
+  contextUsage?: ChatContextUsage | null
+  sources?:
+    | {
+        documentId: string
+        fileName: string
+        chunkIndex: number
+        content: string
+        score: number
+      }[]
+    | null
+  toolCalls?: ChatToolCall[] | null
+  status?: 'completed' | 'failed'
 }

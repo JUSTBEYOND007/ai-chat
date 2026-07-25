@@ -1,10 +1,12 @@
 import { UserOutlined } from '@ant-design/icons'
 import { Bubble } from '@ant-design/x'
+import { Tag } from 'antd'
 import { memo, useEffect, useRef } from 'react'
 import type { GetProp } from 'antd'
 import type { MessageItemProps } from './types'
 import { allMessageContent } from '@pc/components/Bubble/content'
 import type { MessageContent } from '@pc/types/chat'
+import { AgentTrace } from './AgentTrace'
 
 /**
  * 单条消息组件
@@ -107,6 +109,14 @@ export const MessageItem = memo<MessageItemProps>(
         ref={itemRef}
         className={`virtual-chat-list-item virtual-chat-list-item-${message.role}`}
         style={style}>
+        {message.role === 'system' &&
+        (message.agentSteps?.length || message.contextUsage) ? (
+          <AgentTrace
+            steps={message.agentSteps || []}
+            contextUsage={message.contextUsage}
+            isStreaming={message.streamStatus === 'streaming'}
+          />
+        ) : null}
         <Bubble
           placement={roleConfig?.placement}
           avatar={roleConfig?.avatar}
@@ -114,6 +124,32 @@ export const MessageItem = memo<MessageItemProps>(
           style={roleConfig?.style}
           content={renderMessageContent(message.content)}
         />
+        {!message.agentSteps?.length && message.toolCalls?.length ? (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {message.toolCalls.map((toolCall, toolIndex) => (
+              <Tag key={`${toolCall.name}-${toolIndex}`} color="blue">
+                {toolCall.name}
+                {typeof toolCall.resultCount === 'number'
+                  ? ` · ${toolCall.resultCount} sources`
+                  : ''}
+              </Tag>
+            ))}
+          </div>
+        ) : null}
+        {message.sources?.length ? (
+          <div className="mt-2 rounded border border-blue-100 bg-blue-50 p-2 text-xs text-slate-600">
+            <div className="mb-1 font-medium text-blue-700">知识库引用</div>
+            <div className="flex flex-col gap-1">
+              {message.sources.map((source, sourceIndex) => (
+                <div key={`${source.documentId}-${source.chunkIndex}-${sourceIndex}`}>
+                  <span className="font-medium">{source.fileName}</span>
+                  <span> · chunk {source.chunkIndex} · {source.score.toFixed(2)}</span>
+                  <p className="m-0 line-clamp-2">{source.content}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {statusText && (
           <div
             className={`mt-1 text-xs text-right ${

@@ -145,7 +145,10 @@ export class ChatController {
   }
 
   @Post('sendMessage')
-  async sendMessage(@Body() sendMessageDto: SendMessageDto) {
+  async sendMessage(
+    @Body() sendMessageDto: SendMessageDto,
+    @Req() request: Request,
+  ) {
     // 验证必要的参数
     if (!sendMessageDto.id || !sendMessageDto.message) {
       throw new HttpException(
@@ -155,11 +158,14 @@ export class ChatController {
     }
 
     // 调用 service 方法处理消息并通过 SSE 发送响应
-    await this.chatService.useGeminiToChat(sendMessageDto);
+    const result = await this.chatService.useGeminiToChat(
+      sendMessageDto,
+      request.user.userId,
+    );
 
     return {
       msg: '消息已发送并开始处理',
-      data: {},
+      data: result,
     };
   }
 }

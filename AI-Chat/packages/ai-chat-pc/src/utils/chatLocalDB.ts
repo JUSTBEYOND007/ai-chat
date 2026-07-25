@@ -12,6 +12,7 @@ export type PendingMessageRecord = {
   chatId: string
   content: string
   fileId?: string
+  knowledgeBaseId?: string
   status: PendingMessageStatus
   createdAt: number
   updatedAt: number

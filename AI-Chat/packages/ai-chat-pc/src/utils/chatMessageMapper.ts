@@ -56,6 +56,12 @@ export const mapChatHistoryToMessages = (messages: ChatMessage[]): MessageProps[
     mappedMessages.push({
       id: message.id,
       createdAt,
+      knowledgeBaseId: message.knowledgeBaseId || undefined,
+      agentSteps: message.agentSteps || undefined,
+      contextUsage: message.contextUsage || undefined,
+      sources: message.sources || undefined,
+      toolCalls: message.toolCalls || undefined,
+      streamStatus: message.status === 'failed' ? 'interrupted' : 'completed',
       content: [
         {
           type: 'text',

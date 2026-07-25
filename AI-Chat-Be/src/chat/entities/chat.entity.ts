@@ -10,6 +10,15 @@ import {
 import { Message } from './message.entity';
 import { FileEntity } from 'src/file/entities/file.entity';
 
+export interface ChatMemorySnapshot {
+  scopeKey: string;
+  content: string;
+  throughMessageId: string;
+  summarizedMessageCount: number;
+  updatedAt: number;
+  version: number;
+}
+
 @Entity()
 export class Chat {
   @PrimaryGeneratedColumn('uuid')
@@ -29,6 +38,18 @@ export class Chat {
 
   @Column()
   userId: number;
+
+  @Column({
+    default: true,
+  })
+  memoryEnabled: boolean;
+
+  @Column({
+    type: 'json',
+    nullable: true,
+    select: false,
+  })
+  memorySnapshots?: ChatMemorySnapshot[];
 
   @OneToMany(() => Message, (message) => message.chat)
   messages: Message[];

@@ -6,10 +6,17 @@ import { Chat } from './entities/chat.entity';
 import { Message } from './entities/message.entity';
 import { FileModule } from 'src/file/file.module';
 import { AiModule } from 'src/ai/ai.module';
+import { AgentRuntimeModule } from 'src/agent-runtime/agent-runtime.module';
+import { ChatMemoryService } from './services/chat-memory.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Chat, Message]), FileModule, AiModule],
+  imports: [
+    TypeOrmModule.forFeature([Chat, Message]),
+    FileModule,
+    AiModule,
+    AgentRuntimeModule,
+  ],
   controllers: [ChatController],
-  providers: [ChatService],
+  providers: [ChatService, ChatMemoryService],
 })
 export class ChatModule {}

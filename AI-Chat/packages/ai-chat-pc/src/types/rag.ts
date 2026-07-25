@@ -59,6 +59,13 @@ export type KnowledgeDocument = {
   updatedAt: string
 }
 
+export type KnowledgeDocumentActionResponse = {
+  documentId: string
+  status?: KnowledgeDocumentStatus
+  chunkCount?: number
+  deleted?: boolean
+}
+
 export type CreateKnowledgeBaseParams = {
   name: string
   description?: string
