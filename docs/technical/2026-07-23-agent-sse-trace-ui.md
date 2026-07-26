@@ -218,3 +218,18 @@ VirtualChatList 已有 ResizeObserver 监听消息实际高度。Trace 总体展
 4. 增加上下文调试面板，展示实际进入模型的消息和 Token 估算。
 
 在进入该阶段前，也可以先补 generation cancel API，实现真正的服务端 Agent 取消。
+
+
+## Real Environment Validation Update (2026-07-26)
+
+Real structured SSE validation passed.
+
+- Calculator generation events used seq 1 through 9 with no gap or duplicate.
+- tool_start and tool_result were paired by toolCallId.
+- The complete event and persisted message contained toolCalls, agentSteps, and contextUsage.
+- Immediate reconnect with generationId and afterSeq=5 replayed only seq 6, 7, 8, and 9.
+- Every replayed event belonged to the requested generation.
+- Cancelled generation replay ended in cancelled and did not return to streaming or completed.
+- A streaming file cancellation produced seq 1 through 4 and preserved partial text.
+
+The browser Trace panel was not independently inspected in an automated browser session. API/SSE history persistence was verified through the real backend.

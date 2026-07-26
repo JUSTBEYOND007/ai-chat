@@ -7,6 +7,9 @@ const createService = () => {
       if (key === 'RAG_QUERY_REWRITE_TIMEOUT_MS') {
         return '1000';
       }
+      if (key === 'DASHSCOPE_API_KEY') {
+        return 'test-key';
+      }
       return undefined;
     }),
   } as unknown as ConfigService;
@@ -101,6 +104,7 @@ describe('KnowledgeQueryRewriteService', () => {
 
     const result = await service.rewrite({
       query: '这个默认条件具体是多少？',
+      mode: 'always',
       history: [{ role: 'user', content: '项目什么时候生成摘要记忆？' }],
     });
 

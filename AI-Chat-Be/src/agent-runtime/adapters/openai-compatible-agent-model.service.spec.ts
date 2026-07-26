@@ -88,6 +88,7 @@ describe('OpenAICompatibleAgentModel', () => {
         messages: expect.arrayContaining([
           expect.objectContaining({
             role: 'assistant',
+            content: '',
             tool_calls: [
               expect.objectContaining({ id: 'previous-call' }),
             ],

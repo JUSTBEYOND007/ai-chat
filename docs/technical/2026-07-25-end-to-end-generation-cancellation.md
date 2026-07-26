@@ -220,3 +220,25 @@ timed_out
 7. 用 cancelled generationId 重连 SSE，只重放到 cancelled 终态。
 
 如果未来部署多个后端实例，应把 generation 所有权与终态放入 Redis，并通过实例路由或消息总线把取消指令送到持有 AbortController 的进程。
+
+
+## Real Environment Validation Update (2026-07-26)
+
+The automated verification and real HTTP/SSE checks are complete.
+
+- Full backend Jest: 25 suites, 90 tests passed.
+- Cancellation-focused Jest: 4 suites, 32 tests passed.
+- Backend and frontend builds passed.
+- Agent cancel API latency: 9.59 ms.
+- Stop-to-terminal SSE event: 17.79 ms.
+- Additional answer chunks after cancel: 0.
+- Persisted status: cancelled; no incorrect completed message.
+- Repeated cancel returned cancelled with alreadyTerminal=true.
+- Cancel after completion returned completed with alreadyTerminal=true.
+- Cross-user cancel returned 404.
+- Cancelled generation replay ended in cancelled.
+- A three-chunk file stream preserved 29 characters of partial text.
+- regenerate=true started a new generation and remained cancellable.
+- A test-only 1000 ms timeout persisted timed_out and emitted AGENT_TIMEOUT.
+
+The browser button itself was not independently clicked in an automated browser. The frontend-facing cancellation API and SSE contracts were exercised directly. Detailed evidence is in `2026-07-26-real-environment-validation-report.md`.

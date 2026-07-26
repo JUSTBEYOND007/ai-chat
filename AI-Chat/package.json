@@ -6,7 +6,7 @@
   "scripts": {
     "dev:pc": "pnpm run --F @ai-chat/pc dev",
     "dev:pg": "pnpm run --F @ai-chat/plug dev",
-    "build": "tsc -b && vite build",
+    "build": "pnpm -r run build",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{js,ts,jsx,tsx,css,html,md,json}\"",
     "preview": "vite preview",

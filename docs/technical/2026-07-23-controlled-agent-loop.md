@@ -206,3 +206,25 @@ interface MessageToolCall {
 结构化 SSE 与前端 Agent Trace 已在后续迭代完成，详见：[结构化 Agent SSE 与 Trace UI](./2026-07-23-agent-sse-trace-ui.md)。
 
 该迭代已经实现 Runner 事件回调、`generationId + seq` 重放、`toolCallId` 配对、Trace 时间线和历史恢复。Tool Calling 参数的逐 Token 增量拼接仍未实现，当前 Agent 最终回答通过单个 `answer_chunk` 发送。
+
+
+## Real Environment Validation Update (2026-07-26)
+
+Real model-driven tool execution passed with a temporary process-only qwen-plus Agent model override.
+
+Calculator evidence:
+
+- The model selected calculator once.
+- Input: `(98765 * 4321) + 17`.
+- Output: `426763582`.
+- Tool duration: 1 ms.
+- The final answer, toolCalls, and four Agent steps were persisted.
+
+Knowledge Search evidence:
+
+- The model selected knowledge_search once.
+- One synthetic public source was returned at score 0.7383902296265226.
+- knowledgeBaseId, sources, toolCalls, and Agent steps were persisted.
+- A second user received 404 when accessing the first user's knowledge base.
+
+A real compatibility bug was fixed: assistant tool-call messages now map nullable content to an empty string for DashScope. qwen-long still repeats tool calls after tool results, while qwen-plus produces the final answer. See `2026-07-26-real-environment-validation-report.md`.

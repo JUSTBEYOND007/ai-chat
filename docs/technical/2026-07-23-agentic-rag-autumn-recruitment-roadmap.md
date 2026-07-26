@@ -544,3 +544,28 @@
 - [ ] 前端能够解释检索候选如何被召回、过滤和选入上下文。
 - [x] 停止生成已接通服务端模型和工具 AbortSignal（真实环境验证待完成）。
 - [ ] 每个核心功能都有对应技术文档和可讲清楚的设计取舍。
+
+
+## Real Environment Validation Update (2026-07-26)
+
+The following real-environment acceptance work is now complete:
+
+- Reproducible vector baseline and hybrid RRF Markdown/JSON reports.
+- 26/26 completed cases for both strategies.
+- Hit@5, MRR, citation hit rate, keyword coverage, refusal rate, and latency metrics.
+- Query Rewrite, vector, keyword, fused channel, filter, and selection diagnostics.
+- Threshold grid calibration with an evidence-based decision to leave thresholds disabled.
+- Real Calculator and Knowledge Search tool selection and persistence.
+- Cross-user knowledge-base isolation.
+- SSE replay with generationId, seq, and afterSeq.
+- Multi-turn Context Builder and Summary Memory persistence.
+- Real cancellation, partial-text preservation, regeneration, terminal idempotency, ownership, replay, and timed_out persistence.
+
+Still pending:
+
+- Browser-level inspection of the Stop button and Agent Trace UI.
+- Model-driven Knowledge Search using repository fixture chunks; external-data policy required a synthetic public knowledge base for the Agent test.
+- Real induced summary-generation failure tolerance.
+- Retrieval-explanation UI for candidate, filter, and selection diagnostics.
+
+The full measurements and report paths are in `2026-07-26-real-environment-validation-report.md`.

@@ -1,7 +1,21 @@
 # Vector Baseline Status
 
-Status: not run.
+Status: completed on 2026-07-26.
 
-The runner, evaluation corpus and dataset are present, but this repository snapshot has not produced an evidence-backed baseline result yet. A valid result requires PostgreSQL/pgvector, the embedding API, a running backend, a dedicated knowledge base containing every file under `evaluation/fixtures/flow-chat`, and an authenticated token.
+Real PostgreSQL/pgvector evaluation completed with all 26 cases and no runner failures.
 
-Do not copy placeholder metric values into a resume or technical explanation. Run `pnpm eval:rag` with the documented environment variables and commit the generated Markdown and JSON report after the environment is available.
+Generated reports:
+
+- `vector_baseline-top5-2026-07-26T12-33-38-160Z.md`
+- `vector_baseline-top5-2026-07-26T12-33-38-160Z.json`
+
+Headline metrics:
+
+- Hit@5: 1.0000
+- MRR: 0.8788
+- Citation document hit rate: 1.0000
+- Required keyword coverage: 1.0000
+- Unanswerable refusal rate: 0.0000
+- Average/P50/P95 latency: 167.15 / 146 / 244 ms
+
+See `docs/technical/2026-07-26-real-environment-validation-report.md` for the hybrid comparison and threshold decision.

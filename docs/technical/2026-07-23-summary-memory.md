@@ -213,3 +213,17 @@ pnpm --filter @ai-chat/pc build
 - 当前摘要质量没有离线评测指标。
 
 下一步建议实现“会话记忆控制”：提供查询状态、清除当前作用域摘要和开关记忆 API，并在前端上下文调试面板加入对应入口。
+
+
+## Real Environment Validation Update (2026-07-26)
+
+Summary Memory was validated with process-only thresholds of 6 trigger messages, 2 recent messages, and 1 minimum new message.
+
+- Turn 4 reported usedSummary=true.
+- Context usage reported summaryTokens=106 and summarizedMessageCount=4.
+- PostgreSQL contained a general-scope snapshot with version 2.
+- The persisted snapshot had summarizedMessageCount=6 and a valid throughMessageId.
+- The summary contained the three synthetic conversation markers.
+- The public chat query omits memorySnapshots because the column is select:false.
+
+Real summary-generation failure was not induced. Failure tolerance remains covered by automated tests.

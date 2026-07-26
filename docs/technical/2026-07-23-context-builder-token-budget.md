@@ -209,3 +209,17 @@ pnpm --filter @ai-chat/pc build
 - 前端目前展示上下文总览，还没有可展开查看“具体选中了哪些历史消息”的调试面板。
 
 下一步建议补充会话记忆状态、清除和关闭接口，并将摘要更新迁移为可恢复的异步任务。
+
+
+## Real Environment Validation Update (2026-07-26)
+
+Real multi-turn context measurements were collected with synthetic prompts.
+
+| Turn | estimatedInputTokens | includedHistoryMessages | historyTokens | summaryTokens | usedSummary |
+|---|---:|---:|---:|---:|---|
+| 1 | 219 | 0 | 0 | 0 | false |
+| 2 | 260 | 2 | 43 | 0 | false |
+| 3 | 297 | 4 | 79 | 0 | false |
+| 4 | 367 | 2 | 37 | 106 | true |
+
+All turns reported overBudget=false, with no dropped or truncated history. The fourth turn retained recent messages while using the persisted summary. Full backend Jest and build passed.
