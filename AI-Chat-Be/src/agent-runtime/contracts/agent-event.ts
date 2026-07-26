@@ -15,7 +15,7 @@ export type AgentRuntimeEvent =
   | (AgentRuntimeEventBase & {
       type: 'planning';
       round: number;
-      status: 'running' | 'completed' | 'failed';
+      status: 'running' | 'completed' | 'failed' | 'cancelled';
       startedAt: number;
       durationMs?: number;
       message?: string;

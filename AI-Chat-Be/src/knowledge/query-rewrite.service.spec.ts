@@ -113,4 +113,20 @@ describe('KnowledgeQueryRewriteService', () => {
       },
     });
   });
+
+  it('does not turn a parent cancellation into a rewrite fallback', async () => {
+    const { service, create } = createService();
+    const controller = new AbortController();
+    controller.abort(new Error('用户停止生成'));
+
+    await expect(
+      service.rewrite({
+        query: '这个默认条件具体是多少？',
+        mode: 'always',
+        history: [{ role: 'user', content: '项目什么时候生成摘要记忆？' }],
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('用户停止生成');
+    expect(create).not.toHaveBeenCalled();
+  });
 });

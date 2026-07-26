@@ -62,6 +62,7 @@ const createService = () => {
 
   return {
     service,
+    chatRepository,
     messageRepository,
     aiService,
     agentRunner,
@@ -410,6 +411,7 @@ describe('ChatService', () => {
       'describe it',
       'uploads/image.png',
       undefined,
+      expect.any(AbortSignal),
     );
   });
 
@@ -495,5 +497,163 @@ describe('ChatService', () => {
         status: MessageStatus.FAILED,
       }),
     );
+  });
+
+  it('persists Agent timeout separately from an ordinary failure', async () => {
+    const { service, messageRepository, agentRunner } = createService();
+    messageRepository.findOne.mockResolvedValue(null);
+    agentRunner.run.mockRejectedValue(
+      new AgentRunError('AGENT_TIMEOUT', 'Agent execution timed out', {
+        steps: [],
+        toolResults: [],
+        contextUsage,
+      }),
+    );
+
+    await expect(
+      service.useGeminiToChat(
+        {
+          id: 'chat-1',
+          message: 'hello',
+          generationId: '55555555-5555-4555-8555-555555555555',
+        },
+        1,
+      ),
+    ).rejects.toThrow('Chat failed');
+    expect(messageRepository.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: MessageStatus.TIMED_OUT }),
+    );
+  });
+
+  it('cancels an owned running generation and persists an interrupted answer', async () => {
+    const { service, messageRepository, agentRunner } = createService();
+    messageRepository.findOne.mockResolvedValue(null);
+    agentRunner.run.mockImplementation(
+      async ({ context }: { context: { signal: AbortSignal } }) =>
+        new Promise((_, reject) => {
+          context.signal.addEventListener('abort', () => {
+            reject(
+              new AgentRunError('AGENT_CANCELLED', '用户取消了本次生成', {
+                steps: [],
+                toolResults: [],
+                contextUsage,
+              }),
+            );
+          });
+        }),
+    );
+
+    const generationId = '11111111-1111-4111-8111-111111111111';
+    const runPromise = service.useGeminiToChat(
+      {
+        id: 'chat-1',
+        message: '请生成一个很长的回答',
+        generationId,
+      },
+      1,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await expect(
+      service.cancelGeneration('chat-1', generationId, 1),
+    ).resolves.toEqual({
+      generationId,
+      status: 'cancelled',
+      alreadyTerminal: false,
+    });
+    await expect(runPromise).resolves.toEqual({
+      status: 'cancelled',
+      generationId,
+    });
+    expect(messageRepository.save).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        role: MessageRole.SYSTEM,
+        content: '生成已停止。',
+        status: MessageStatus.CANCELLED,
+      }),
+    );
+
+    const replayed: unknown[] = [];
+    const subscription = service
+      .getStreamEvents('chat-1', generationId, 0)
+      .subscribe((event) => replayed.push(event.data));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    subscription.unsubscribe();
+    expect(replayed).toContainEqual(
+      expect.objectContaining({
+        type: 'cancelled',
+        generationId,
+        isComplete: true,
+      }),
+    );
+  });
+
+  it('keeps repeated cancellation idempotent', async () => {
+    const { service, messageRepository, agentRunner } = createService();
+    messageRepository.findOne.mockResolvedValue(null);
+    agentRunner.run.mockImplementation(
+      async ({ context }: { context: { signal: AbortSignal } }) =>
+        new Promise((_, reject) => {
+          context.signal.addEventListener('abort', () => {
+            reject(new AgentRunError('AGENT_CANCELLED', 'cancelled'));
+          });
+        }),
+    );
+    const generationId = '22222222-2222-4222-8222-222222222222';
+    const runPromise = service.useGeminiToChat(
+      { id: 'chat-1', message: 'hello', generationId },
+      1,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await service.cancelGeneration('chat-1', generationId, 1);
+    await expect(
+      service.cancelGeneration('chat-1', generationId, 1),
+    ).resolves.toEqual({
+      generationId,
+      status: 'cancelled',
+      alreadyTerminal: true,
+    });
+    await runPromise;
+  });
+
+  it('does not expose a generation to another user', async () => {
+    const { service, chatRepository } = createService();
+    chatRepository.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.cancelGeneration(
+        'chat-1',
+        '33333333-3333-4333-8333-333333333333',
+        2,
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('returns the completed terminal state when cancellation arrives late', async () => {
+    const { service, messageRepository, agentRunner } = createService();
+    messageRepository.findOne.mockResolvedValue(null);
+    agentRunner.run.mockResolvedValue({
+      generationId: '44444444-4444-4444-8444-444444444444',
+      status: 'completed',
+      answer: 'done',
+      steps: [],
+      toolResults: [],
+      contextUsage,
+    });
+    const generationId = '44444444-4444-4444-8444-444444444444';
+
+    await service.useGeminiToChat(
+      { id: 'chat-1', message: 'hello', generationId },
+      1,
+    );
+
+    await expect(
+      service.cancelGeneration('chat-1', generationId, 1),
+    ).resolves.toEqual({
+      generationId,
+      status: 'completed',
+      alreadyTerminal: true,
+    });
   });
 });

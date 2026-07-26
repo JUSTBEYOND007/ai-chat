@@ -18,6 +18,10 @@ export class SendMessageDto {
   clientMessageId?: string;
 
   @IsOptional()
+  @IsUUID('4', { message: 'generationId格式不正确' })
+  generationId?: string;
+
+  @IsOptional()
   @IsUUID('4', { message: 'knowledgeBaseId格式不正确' })
   knowledgeBaseId?: string;
 

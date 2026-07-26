@@ -82,21 +82,34 @@ export class AgentRunner {
       summary,
       onEvent,
     );
+    let rejectCancellation: ((reason?: unknown) => void) | undefined;
+    const cancellation = new Promise<never>((_, reject) => {
+      rejectCancellation = reject;
+    });
+    const rejectOnAbort = () => {
+      rejectCancellation?.(
+        new AgentRunError('AGENT_CANCELLED', '用户取消了本次生成', state),
+      );
+    };
+    controller.signal.addEventListener('abort', rejectOnAbort, { once: true });
+    if (controller.signal.aborted) {
+      rejectOnAbort();
+    }
 
     try {
       return await Promise.race([
         execution,
+        cancellation,
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
             didTimeout = true;
-            controller.abort(new Error('Agent 总执行时间超限'));
-            reject(
-              new AgentRunError(
-                'AGENT_TIMEOUT',
-                `Agent 执行超过 ${this.totalTimeoutMs}ms`,
-                state,
-              ),
+            const timeoutError = new AgentRunError(
+              'AGENT_TIMEOUT',
+              `Agent 执行超过 ${this.totalTimeoutMs}ms`,
+              state,
             );
+            controller.abort(timeoutError);
+            reject(timeoutError);
           }, this.totalTimeoutMs);
         }),
       ]);
@@ -105,6 +118,13 @@ export class AgentRunner {
         throw new AgentRunError(
           'AGENT_TIMEOUT',
           `Agent 执行超过 ${this.totalTimeoutMs}ms`,
+          state,
+        );
+      }
+      if (context.signal?.aborted) {
+        throw new AgentRunError(
+          'AGENT_CANCELLED',
+          '用户取消了本次生成',
           state,
         );
       }
@@ -120,6 +140,7 @@ export class AgentRunner {
       if (timeout) {
         clearTimeout(timeout);
       }
+      controller.signal.removeEventListener('abort', rejectOnAbort);
       context.signal?.removeEventListener('abort', abortFromParent);
     }
   }
@@ -143,6 +164,8 @@ export class AgentRunner {
     state.contextUsage = contextBuild.usage;
     const { steps, toolResults } = state;
 
+    this.throwIfCancelled(context, state);
+
     this.emitEvent(onEvent, {
       type: 'generation_start',
       generationId: context.generationId,
@@ -152,6 +175,7 @@ export class AgentRunner {
     });
 
     for (let toolRound = 0; toolRound <= this.maxToolRounds; toolRound += 1) {
+      this.throwIfCancelled(context, state);
       const planningStartedAt = Date.now();
       const round = toolRound + 1;
       this.emitEvent(onEvent, {
@@ -172,36 +196,77 @@ export class AgentRunner {
         });
       } catch (error) {
         const completedAt = Date.now();
+        const timedOut =
+          context.signal?.reason instanceof AgentRunError &&
+          context.signal.reason.code === 'AGENT_TIMEOUT';
+        const cancelled = Boolean(context.signal?.aborted && !timedOut);
         steps.push({
           stepId: `${context.generationId}:planning:${round}`,
           type: 'planning',
-          status: 'failed',
+          status: cancelled ? 'cancelled' : 'failed',
           round,
           startedAt: planningStartedAt,
           completedAt,
           durationMs: completedAt - planningStartedAt,
           error: {
-            code: 'MODEL_CALL_FAILED',
-            message: error instanceof Error ? error.message : String(error),
+            code: cancelled
+              ? 'AGENT_CANCELLED'
+              : timedOut
+                ? 'AGENT_TIMEOUT'
+                : 'MODEL_CALL_FAILED',
+            message: cancelled
+              ? '用户取消了本次生成'
+              : timedOut
+                ? `Agent 执行超过 ${this.totalTimeoutMs}ms`
+                : error instanceof Error
+                  ? error.message
+                  : String(error),
           },
-          message: '模型规划失败',
+          message: cancelled
+            ? '模型规划已取消'
+            : timedOut
+              ? '模型规划已超时'
+              : '模型规划失败',
         });
         this.emitEvent(onEvent, {
           type: 'planning',
           generationId: context.generationId,
           timestamp: completedAt,
           round,
-          status: 'failed',
+          status: cancelled ? 'cancelled' : 'failed',
           startedAt: planningStartedAt,
           durationMs: completedAt - planningStartedAt,
-          message: '模型规划失败',
+          message: cancelled
+            ? '模型规划已取消'
+            : timedOut
+              ? '模型规划已超时'
+              : '模型规划失败',
           error: {
-            code: 'MODEL_CALL_FAILED',
-            message: error instanceof Error ? error.message : String(error),
+            code: cancelled
+              ? 'AGENT_CANCELLED'
+              : timedOut
+                ? 'AGENT_TIMEOUT'
+                : 'MODEL_CALL_FAILED',
+            message: cancelled
+              ? '用户取消了本次生成'
+              : timedOut
+                ? `Agent 执行超过 ${this.totalTimeoutMs}ms`
+                : error instanceof Error
+                  ? error.message
+                  : String(error),
           },
         });
+        if (cancelled) {
+          throw new AgentRunError(
+            'AGENT_CANCELLED',
+            '用户取消了本次生成',
+            state,
+          );
+        }
         throw error;
       }
+
+      this.throwIfCancelled(context, state);
 
       const planningCompletedAt = Date.now();
       steps.push({
@@ -315,10 +380,12 @@ export class AgentRunner {
       );
 
       for (const result of roundResults) {
+        const cancelled =
+          result.status === 'failed' && result.error.code === 'TOOL_ABORTED';
         steps.push({
           stepId: `${context.generationId}:tool:${result.toolCallId}`,
           type: 'tool',
-          status: result.status,
+          status: cancelled ? 'cancelled' : result.status,
           round,
           toolCallId: result.toolCallId,
           toolName: result.toolName,
@@ -328,8 +395,9 @@ export class AgentRunner {
           startedAt: result.startedAt,
           completedAt: result.completedAt,
           durationMs: result.durationMs,
-          message:
-            result.status === 'completed'
+          message: cancelled
+            ? `${result.toolName} 执行已取消`
+            : result.status === 'completed'
               ? `${result.toolName} 执行完成`
               : result.error.message,
         });
@@ -340,6 +408,8 @@ export class AgentRunner {
           content: this.contextBuilder.serializeToolResult(result),
         });
       }
+
+      this.throwIfCancelled(context, state);
     }
 
     throw new AgentRunError(
@@ -355,6 +425,22 @@ export class AgentRunner {
     } catch {
       return { rawArguments };
     }
+  }
+
+  private throwIfCancelled(context: AgentContext, state: AgentRunSnapshot) {
+    if (!context.signal?.aborted) {
+      return;
+    }
+
+    if (context.signal.reason instanceof AgentRunError) {
+      throw context.signal.reason;
+    }
+
+    throw new AgentRunError(
+      'AGENT_CANCELLED',
+      '用户取消了本次生成',
+      state,
+    );
   }
 
   private readBoundedInteger(

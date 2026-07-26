@@ -28,6 +28,7 @@ export type mergeResType = {
 export type SendMessageType = {
   id: string
   message: string
+  generationId?: string
   // imgUrl?: string[]
   fileId?: string
   clientMessageId?: string
@@ -57,6 +58,7 @@ export type AgentStepStatus =
   | 'running'
   | 'completed'
   | 'failed'
+  | 'cancelled'
   | 'interrupted'
 
 export type ChatAgentStep = {
@@ -126,7 +128,7 @@ export type AgentStreamEvent =
   | (AgentStreamEventBase & {
       type: 'planning'
       round: number
-      status: 'running' | 'completed' | 'failed'
+      status: 'running' | 'completed' | 'failed' | 'cancelled'
       startedAt: number
       durationMs?: number
       message?: string

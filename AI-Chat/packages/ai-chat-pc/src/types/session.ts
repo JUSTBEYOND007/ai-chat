@@ -37,5 +37,5 @@ export interface ChatMessage {
       }[]
     | null
   toolCalls?: ChatToolCall[] | null
-  status?: 'completed' | 'failed'
+  status?: 'completed' | 'failed' | 'cancelled' | 'timed_out'
 }

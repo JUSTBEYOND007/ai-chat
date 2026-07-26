@@ -3,6 +3,7 @@ import { AgentToolExecutionResult } from './tool-result';
 import { AgentContextUsage } from './agent-context-builder';
 
 export type AgentRunErrorCode =
+  | 'AGENT_CANCELLED'
   | 'AGENT_TIMEOUT'
   | 'MAX_TOOL_ROUNDS_EXCEEDED'
   | 'EMPTY_MODEL_RESPONSE'

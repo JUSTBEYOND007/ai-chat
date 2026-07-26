@@ -177,7 +177,8 @@
   background: #ef4444;
 }
 
-.agent-trace-step-interrupted .agent-trace-step-dot {
+.agent-trace-step-interrupted .agent-trace-step-dot,
+.agent-trace-step-cancelled .agent-trace-step-dot {
   background: #f59e0b;
 }
 

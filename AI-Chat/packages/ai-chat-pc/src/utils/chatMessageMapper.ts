@@ -61,7 +61,8 @@ export const mapChatHistoryToMessages = (messages: ChatMessage[]): MessageProps[
       contextUsage: message.contextUsage || undefined,
       sources: message.sources || undefined,
       toolCalls: message.toolCalls || undefined,
-      streamStatus: message.status === 'failed' ? 'interrupted' : 'completed',
+      streamStatus:
+        message.status && message.status !== 'completed' ? 'interrupted' : 'completed',
       content: [
         {
           type: 'text',

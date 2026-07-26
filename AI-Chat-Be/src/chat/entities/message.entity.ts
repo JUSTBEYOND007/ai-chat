@@ -48,7 +48,13 @@ export interface MessageToolCall {
 export interface MessageAgentStep {
   stepId: string;
   type: 'planning' | 'tool' | 'answer';
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'interrupted';
+  status:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'interrupted';
   round?: number;
   startedAt: number;
   completedAt?: number;
@@ -85,6 +91,8 @@ export interface MessageContextUsage {
 export enum MessageStatus {
   COMPLETED = 'completed',
   FAILED = 'failed',
+  CANCELLED = 'cancelled',
+  TIMED_OUT = 'timed_out',
 }
 
 @Entity()

@@ -296,20 +296,20 @@
 
 ### 5.1 服务端 Generation 生命周期
 
-- [ ] 以 `generationId` 保存服务端 AbortController 和 chat/user 归属。
-- [ ] 新增取消接口，并校验当前用户只能取消自己的 generation。
-- [ ] 将统一 AbortSignal 继续传给模型调用、Query Rewrite、检索、工具和摘要任务。
-- [ ] generation 完成、失败、超时或取消后清理 Controller，避免内存泄漏。
-- [ ] 重复取消保持幂等。
-- [ ] 区分 `cancelled`、`failed` 和 `timeout`，不要全部映射为普通错误。
+- [x] 以 `generationId` 保存服务端 AbortController 和 chat/user 归属。
+- [x] 新增取消接口，并校验当前用户只能取消自己的 generation。
+- [x] 将统一 AbortSignal 继续传给模型调用、Query Rewrite、检索和工具；摘要刷新只在 completed 后触发。
+- [x] generation 完成、失败、超时或取消后清理 Controller，避免内存泄漏。
+- [x] 重复取消保持幂等。
+- [x] 区分 `cancelled`、`failed` 和 `timed_out`，不要全部映射为普通错误。
 
 ### 5.2 前端停止与竞态处理
 
-- [ ] 停止按钮先调用取消 API，再关闭当前 SSE 连接。
-- [ ] 将未完成 planning/tool/answer Step 标记为 cancelled/interrupted。
-- [ ] 处理 complete 与 cancel 同时到达的竞态，以服务端最终状态为准。
-- [ ] 取消后保留已生成文本，并允许重新生成。
-- [ ] 切换会话不等于取消原会话生成。
+- [x] 停止按钮先调用取消 API，再关闭当前 SSE 连接。
+- [x] 将未完成 planning/tool/answer Step 标记为 cancelled/interrupted。
+- [x] 处理 complete 与 cancel 同时到达的竞态，以服务端最终状态为准。
+- [x] 取消后保留已生成文本，并允许重新生成。
+- [x] 切换会话不等于取消原会话生成。
 
 ### 5.3 阶段验收
 
@@ -317,7 +317,7 @@
 - [ ] 取消后不会继续产生 answer_chunk 或写入 completed 消息。
 - [ ] SSE 重连不会把已取消 generation 恢复成进行中。
 - [ ] 重复取消、完成后取消和越权取消均有确定行为。
-- [ ] 新增取消协议、状态机和竞态测试技术文档。
+- [x] 新增取消协议、状态机和竞态测试技术文档。
 
 ## 阶段六：文档异步入库任务
 
@@ -518,7 +518,18 @@
 - [ ] 根据真实报告校准最低阈值，并决定相邻过滤默认值。
 - [ ] 将完整 hybrid 策略切换到正式 `knowledge_search`。
 
-下一步先在另一台可运行电脑完成真实 baseline、hybrid 对比和阈值校准，再将 hybrid 策略接入正式聊天及前端检索 Trace。暂不先做缓存、BullMQ 或模型 reranker。
+第九轮端到端停止生成开发范围：
+
+- [x] 前端预生成 generationId，并用于发送、SSE 和取消接口。
+- [x] 服务端注册 generation 的 chat/user 归属和 AbortController。
+- [x] 接通 Agent、模型、工具、Query Rewrite 和检索的 AbortSignal。
+- [x] 新增幂等取消 API 和 cancelled SSE 终态。
+- [x] 持久化区分 completed、failed、cancelled 和 timed_out。
+- [x] 处理 complete/cancel 竞态、事件隔离和五分钟重放缓存清理。
+- [x] 补充取消、越权、幂等、完成后取消测试代码和技术文档。
+- [ ] 在可运行环境完成真实模型、工具与 SSE 端到端取消验证。
+
+下一步需要在另一台可运行电脑并行完成两类真实验证：一是 baseline/hybrid 对比和阈值校准，二是端到端取消测试。验证通过后将 hybrid 策略接入正式 `knowledge_search`，随后进入 BullMQ 异步文档入库。
 
 ## 秋招完成标准
 
@@ -531,5 +542,5 @@
 - [ ] RAG 有一套可复现的离线评测结果。
 - [ ] Query Rewrite、双路召回、融合、阈值和多样性均有对比指标。
 - [ ] 前端能够解释检索候选如何被召回、过滤和选入上下文。
-- [ ] 停止生成可以真实取消服务端模型和工具执行。
+- [x] 停止生成已接通服务端模型和工具 AbortSignal（真实环境验证待完成）。
 - [ ] 每个核心功能都有对应技术文档和可讲清楚的设计取舍。

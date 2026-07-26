@@ -313,4 +313,27 @@ describe('AgentRunner', () => {
     await jest.advanceTimersByTimeAsync(1_000);
     await assertion;
   });
+
+  it('maps a parent abort to AGENT_CANCELLED', async () => {
+    const { runner, model } = createRunner();
+    const controller = new AbortController();
+    jest.mocked(model.complete).mockImplementation(
+      async ({ signal }) =>
+        new Promise<never>((_, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason));
+        }),
+    );
+
+    const runPromise = runner.run({
+      message: '等待模型',
+      context: { ...context, signal: controller.signal },
+    });
+    controller.abort(new Error('stop'));
+
+    await expect(runPromise).rejects.toEqual(
+      expect.objectContaining<Partial<AgentRunError>>({
+        code: 'AGENT_CANCELLED',
+      }),
+    );
+  });
 });

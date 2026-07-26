@@ -12,6 +12,7 @@ export interface RewriteKnowledgeQueryInput {
   mode?: QueryRewriteMode;
   history?: RetrievalHistoryMessage[];
   summary?: string;
+  signal?: AbortSignal;
 }
 
 export interface RewriteKnowledgeQueryResult {
@@ -59,7 +60,9 @@ export class KnowledgeQueryRewriteService {
     mode = 'auto',
     history = [],
     summary,
+    signal,
   }: RewriteKnowledgeQueryInput): Promise<RewriteKnowledgeQueryResult> {
+    this.throwIfAborted(signal);
     const originalQuery = query.trim();
     const selectedHistory = history
       .filter((message) => message.content.trim())
@@ -119,7 +122,17 @@ export class KnowledgeQueryRewriteService {
 
     const startedAt = Date.now();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    let didTimeout = false;
+    const abortFromParent = () => controller.abort(signal?.reason);
+    if (signal?.aborted) {
+      abortFromParent();
+    } else {
+      signal?.addEventListener('abort', abortFromParent, { once: true });
+    }
+    const timeout = setTimeout(() => {
+      didTimeout = true;
+      controller.abort(new Error('查询改写超时'));
+    }, this.timeoutMs);
 
     try {
       const response = await this.client.chat.completions.create(
@@ -196,8 +209,13 @@ export class KnowledgeQueryRewriteService {
         },
       };
     } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new Error('查询改写已取消');
+      }
       const durationMs = Date.now() - startedAt;
-      const reason = controller.signal.aborted ? 'timeout' : 'model_error';
+      const reason = didTimeout ? 'timeout' : 'model_error';
       return this.fallback(
         originalQuery,
         traceBase,
@@ -207,7 +225,18 @@ export class KnowledgeQueryRewriteService {
       );
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener('abort', abortFromParent);
     }
+  }
+
+  private throwIfAborted(signal?: AbortSignal) {
+    if (!signal?.aborted) {
+      return;
+    }
+
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error('查询改写已取消');
   }
 
   shouldRewrite(

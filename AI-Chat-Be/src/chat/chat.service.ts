@@ -1,4 +1,4 @@
-import { Observable, Subject } from 'rxjs';
+import { Observable, Subject, from, switchMap } from 'rxjs';
 import { Between, Like, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 
@@ -67,7 +67,17 @@ type StreamEventPayload =
       seq?: number;
       timestamp: number;
       content: string;
+      code?: string;
       isComplete: true;
+    }
+  | {
+      type: 'cancelled';
+      generationId: string;
+      seq: number;
+      timestamp: number;
+      content: string;
+      isComplete: true;
+      agentSteps?: MessageAgentStep[];
     }
   | (AgentRuntimeEvent & {
       seq: number;
@@ -75,9 +85,20 @@ type StreamEventPayload =
 
 type StreamGenerationCache = {
   chatId: string;
+  userId: number;
   generationId: string;
   events: StreamEventPayload[];
+  status: 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled';
+  controller?: AbortController;
+  cleanupTimer?: ReturnType<typeof setTimeout>;
 };
+
+class GenerationCancelledError extends Error {
+  constructor() {
+    super('用户取消了本次生成');
+    this.name = 'GenerationCancelledError';
+  }
+}
 
 export type SendMessageResult =
   | {
@@ -87,7 +108,17 @@ export type SendMessageResult =
   | {
       status: 'duplicate';
       messageId: string;
+    }
+  | {
+      status: 'cancelled';
+      generationId: string;
     };
+
+export type CancelGenerationResult = {
+  generationId: string;
+  status: StreamGenerationCache['status'];
+  alreadyTerminal: boolean;
+};
 
 type MessageMetadata = {
   knowledgeBaseId?: string;
@@ -150,7 +181,18 @@ export class ChatService {
         }
       }
 
-      const subscription = subject.subscribe(subscriber);
+      const subscription = subject.subscribe({
+        next: (event) => {
+          if (
+            !generationId ||
+            this.getEventGenerationId(event) === generationId
+          ) {
+            subscriber.next(event);
+          }
+        },
+        error: (error) => subscriber.error(error),
+        complete: () => subscriber.complete(),
+      });
       return () => subscription.unsubscribe();
     });
   }
@@ -168,16 +210,27 @@ export class ChatService {
     imgUrl,
     fileId,
     clientMessageId,
+    generationId: requestedGenerationId,
     knowledgeBaseId,
     regenerate,
   }: SendMessageDto, userId: number): Promise<SendMessageResult> {
     await this.assertChatOwner(id, userId);
 
-    const generationId = randomUUID();
+    const generationId = requestedGenerationId || randomUUID();
+    if (this.streamGenerations.has(generationId)) {
+      throw new HttpException(
+        'Generation already exists',
+        HttpStatus.CONFLICT,
+      );
+    }
+    const controller = new AbortController();
     const generation: StreamGenerationCache = {
       chatId: id,
+      userId,
       generationId,
       events: [],
+      status: 'running',
+      controller,
     };
     this.streamGenerations.set(generationId, generation);
 
@@ -205,6 +258,8 @@ export class ChatService {
           this.logger.error(`Failed to load file ${fileId}: ${error}`);
         }
       }
+
+      this.throwIfGenerationCancelled(generation);
 
       const existingUserMessage = clientMessageId
         ? await this.messageRepository.findOne({
@@ -243,6 +298,8 @@ export class ChatService {
         ]);
       }
 
+      this.throwIfGenerationCancelled(generation);
+
       let userMessageId = existingUserMessage?.id;
       if (!existingUserMessage) {
         const savedUserMessage = await this.saveMessage(
@@ -269,8 +326,12 @@ export class ChatService {
             messageId: userMessageId,
             clientMessageId,
             knowledgeBaseId,
+            signal: controller.signal,
           },
           onEvent: (event) => {
+            if (generation.status !== 'running') {
+              return;
+            }
             if (event.type === 'answer_chunk') {
               fullContent += event.content;
             }
@@ -287,9 +348,15 @@ export class ChatService {
         agentSteps = agentResult.steps;
         contextUsage = agentResult.contextUsage;
       } else {
-        const completion = await this.aiService.getMain(message, filePath, imgUrl);
+        const completion = await this.aiService.getMain(
+          message,
+          filePath,
+          imgUrl,
+          controller.signal,
+        );
 
         for await (const chunk of completion) {
+          this.throwIfGenerationCancelled(generation);
           if (Array.isArray(chunk.choices) && chunk.choices.length > 0) {
             const content = chunk.choices[0].delta.content || '';
             if (!content) {
@@ -308,6 +375,11 @@ export class ChatService {
             });
           }
         }
+      }
+
+      this.throwIfGenerationCancelled(generation);
+      if (!this.transitionGeneration(generation, 'completed')) {
+        throw new GenerationCancelledError();
       }
 
       seq += 1;
@@ -364,7 +436,21 @@ export class ChatService {
         generationId,
       };
     } catch (error) {
-      this.logger.error(`Chat ${id} failed: ${error}`);
+      const cancelled =
+        generation.status === 'cancelled' ||
+        error instanceof GenerationCancelledError ||
+        (error instanceof AgentRunError && error.code === 'AGENT_CANCELLED');
+      const timedOut =
+        error instanceof AgentRunError && error.code === 'AGENT_TIMEOUT';
+
+      generation.status = cancelled
+        ? 'cancelled'
+        : timedOut
+          ? 'timed_out'
+          : 'failed';
+      this.logger.error(
+        `Chat ${id} ${cancelled ? 'cancelled' : timedOut ? 'timed out' : 'failed'}: ${error}`,
+      );
 
       if (error instanceof AgentRunError && error.partialResult) {
         toolCalls = this.mapAgentToolCalls(error.partialResult.toolResults);
@@ -373,7 +459,9 @@ export class ChatService {
         contextUsage = error.partialResult.contextUsage;
       }
 
-      const errorContent = fullContent || '回复失败，请稍后重试。';
+      const errorContent = cancelled
+        ? fullContent || '生成已停止。'
+        : fullContent || '回复失败，请稍后重试。';
       await this.saveMessage(
         id,
         errorContent,
@@ -387,9 +475,26 @@ export class ChatService {
           toolCalls,
           agentSteps,
           contextUsage,
-          status: MessageStatus.FAILED,
+          status: cancelled
+            ? MessageStatus.CANCELLED
+            : timedOut
+              ? MessageStatus.TIMED_OUT
+              : MessageStatus.FAILED,
         },
       );
+
+      if (cancelled) {
+        this.sendGenerationEvent(id, generation, {
+          type: 'cancelled',
+          generationId,
+          seq: seq + 1,
+          timestamp: Date.now(),
+          content: fullContent,
+          isComplete: true,
+          agentSteps,
+        });
+        return { status: 'cancelled', generationId };
+      }
 
       const errorEvent: StreamEventPayload = {
         type: 'error',
@@ -397,6 +502,7 @@ export class ChatService {
         seq: seq + 1,
         timestamp: Date.now(),
         content: `Error: ${error || 'Unknown error'}`,
+        code: timedOut ? 'AGENT_TIMEOUT' : 'GENERATION_FAILED',
         isComplete: true,
       };
       this.sendGenerationEvent(id, generation, errorEvent);
@@ -409,7 +515,55 @@ export class ChatService {
         `Chat failed: ${error || 'Unknown error'}`,
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
+    } finally {
+      generation.controller = undefined;
+      this.scheduleGenerationCleanup(generation);
     }
+  }
+
+  getOwnedStreamEvents(
+    chatId: string,
+    userId: number,
+    generationId?: string,
+    afterSeq = 0,
+  ): Observable<MessageEvent> {
+    return from(this.assertChatOwner(chatId, userId)).pipe(
+      switchMap(() => this.getStreamEvents(chatId, generationId, afterSeq)),
+    );
+  }
+
+  async cancelGeneration(
+    chatId: string,
+    generationId: string,
+    userId: number,
+  ): Promise<CancelGenerationResult> {
+    await this.assertChatOwner(chatId, userId);
+    const generation = this.streamGenerations.get(generationId);
+
+    if (
+      !generation ||
+      generation.chatId !== chatId ||
+      generation.userId !== userId
+    ) {
+      throw new HttpException('Generation not found', HttpStatus.NOT_FOUND);
+    }
+
+    if (generation.status !== 'running') {
+      return {
+        generationId,
+        status: generation.status,
+        alreadyTerminal: true,
+      };
+    }
+
+    generation.status = 'cancelled';
+    generation.controller?.abort(new GenerationCancelledError());
+
+    return {
+      generationId,
+      status: 'cancelled',
+      alreadyTerminal: false,
+    };
   }
 
   async saveMessage(
@@ -640,6 +794,51 @@ export class ChatService {
   ) {
     generation.events.push(event);
     this.sendMessageToChat(chatId, event);
+  }
+
+  private transitionGeneration(
+    generation: StreamGenerationCache,
+    status: Exclude<StreamGenerationCache['status'], 'running'>,
+  ) {
+    if (generation.status !== 'running') {
+      return false;
+    }
+
+    generation.status = status;
+    generation.controller = undefined;
+    return true;
+  }
+
+  private throwIfGenerationCancelled(generation: StreamGenerationCache) {
+    if (
+      generation.status === 'cancelled' ||
+      generation.controller?.signal.aborted
+    ) {
+      throw new GenerationCancelledError();
+    }
+  }
+
+  private scheduleGenerationCleanup(generation: StreamGenerationCache) {
+    if (generation.cleanupTimer) {
+      clearTimeout(generation.cleanupTimer);
+    }
+
+    generation.cleanupTimer = setTimeout(() => {
+      if (this.streamGenerations.get(generation.generationId) === generation) {
+        this.streamGenerations.delete(generation.generationId);
+      }
+    }, 5 * 60 * 1_000);
+    generation.cleanupTimer.unref?.();
+  }
+
+  private getEventGenerationId(event: MessageEvent) {
+    const data = event.data;
+    if (!data || typeof data !== 'object' || !('generationId' in data)) {
+      return undefined;
+    }
+
+    const generationId = (data as { generationId?: unknown }).generationId;
+    return typeof generationId === 'string' ? generationId : undefined;
   }
 
   private createMessageEvent(message: unknown) {

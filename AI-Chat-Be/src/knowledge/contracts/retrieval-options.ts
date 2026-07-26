@@ -12,4 +12,5 @@ export interface KnowledgeRetrievalOptions {
   rewriteMode?: QueryRewriteMode;
   history?: RetrievalHistoryMessage[];
   summary?: string;
+  signal?: AbortSignal;
 }

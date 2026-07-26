@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 import SparkMD5 from 'spark-md5'
 
 import {
+  cancelChatGeneration,
   createSSE,
   getCheckFileAPI,
   postFileChunksAPI,
@@ -38,6 +39,14 @@ const CHUNK_SIZE = 1024 * 1024 * 2
 // 并发上传数量
 const CONCURRENT_UPLOADS = 3
 
+const createGenerationId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID()
+  }
+
+  return `00000000-0000-4000-8000-${Date.now().toString().padStart(12, '0').slice(-12)}`
+}
+
 interface ChunkInfo {
   index: number
   chunk: Blob
@@ -55,6 +64,7 @@ const AIRichInput = () => {
   const abortControllerRef = useRef<AbortController | null>(null)
   const idRef = useRef<string | null>(null)
   const streamClientRef = useRef<StreamChatClient | null>(null)
+  const activeGenerationIdRef = useRef<string | null>(null)
   const uploadedChunksRef = useRef<number[]>([])
   const fileChunksRef = useRef<ChunkInfo[]>([])
   const fileIdRef = useRef<string | null>(null)
@@ -404,12 +414,14 @@ const AIRichInput = () => {
     fileId?: string,
     clientMessageId?: string,
     selectedKnowledgeBaseId?: string,
+    generationId?: string,
     regenerate = false
   ) => {
     try {
       await sendChatMessage({
         id: chatId,
         message: text,
+        generationId,
         // imgUrl: images,
         fileId,
         clientMessageId,
@@ -473,6 +485,8 @@ const AIRichInput = () => {
     selectedKnowledgeBaseId?: string,
     regenerate = false
   ) => {
+    const generationId = createGenerationId()
+    activeGenerationIdRef.current = generationId
     // console.log('images', fileId, images)
     streamClientRef.current?.close()
     startAssistantStream(chatId, {
@@ -489,33 +503,110 @@ const AIRichInput = () => {
       onAgentEvent: (event) => applyAgentEvent(chatId, event),
       onComplete: (content, metadata) => {
         completeLatestAssistantStream(chatId, content, metadata)
+        if (activeGenerationIdRef.current === generationId) {
+          activeGenerationIdRef.current = null
+        }
+        setInputLoading(false)
+      },
+      onCancelled: () => {
+        interruptLatestAssistantStream(chatId)
+        if (activeGenerationIdRef.current === generationId) {
+          activeGenerationIdRef.current = null
+        }
         setInputLoading(false)
       },
       onError: (error) => {
         console.error('SSE connection error:', error)
         interruptLatestAssistantStream(chatId, String(error || 'Agent 执行失败'))
+        if (activeGenerationIdRef.current === generationId) {
+          activeGenerationIdRef.current = null
+        }
         setInputLoading(false)
       },
       onStatusChange: setStreamStatus
     })
 
-    streamClientRef.current.start(chatId)
+    streamClientRef.current.start(chatId, generationId)
 
     // sendMessage(chatId, message, images, fileId)
-    sendMessage(chatId, message, fileId, clientMessageId, selectedKnowledgeBaseId, regenerate).catch(
-      () => undefined
-    )
+    sendMessage(
+      chatId,
+      message,
+      fileId,
+      clientMessageId,
+      selectedKnowledgeBaseId,
+      generationId,
+      regenerate
+    ).catch(() => undefined)
   }
 
-  const stopGeneration = () => {
+  const stopGeneration = async () => {
     const activeChatId = idRef.current || selectedId
-    streamClientRef.current?.abort()
+    const generationId = activeGenerationIdRef.current
 
-    if (activeChatId) {
-      interruptLatestAssistantStream(activeChatId)
+    if (!activeChatId || !generationId) {
+      streamClientRef.current?.abort()
+      if (activeChatId) {
+        interruptLatestAssistantStream(activeChatId)
+      }
+      setInputLoading(false)
+      return
     }
 
-    setInputLoading(false)
+    try {
+      let response: Awaited<ReturnType<typeof cancelChatGeneration>> | undefined
+      let lastError: unknown
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          response = await cancelChatGeneration(activeChatId, generationId)
+          break
+        } catch (error) {
+          lastError = error
+          if (attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 120))
+          }
+        }
+      }
+      if (!response) {
+        throw lastError
+      }
+      const finalStatus = response.data?.status
+
+      if (finalStatus === 'completed') {
+        streamClientRef.current?.abort()
+        setStreamStatus('completed')
+        completeLatestAssistantStream(activeChatId)
+        activeGenerationIdRef.current = null
+        setInputLoading(false)
+        message.info('本次回复已完成')
+        return
+      }
+
+      if (finalStatus === 'failed' || finalStatus === 'timed_out') {
+        streamClientRef.current?.close()
+        setStreamStatus('error')
+        interruptLatestAssistantStream(
+          activeChatId,
+          finalStatus === 'timed_out' ? '生成已超时' : '生成已经失败'
+        )
+        activeGenerationIdRef.current = null
+        setInputLoading(false)
+        return
+      }
+
+      streamClientRef.current?.close()
+      setStreamStatus('cancelled')
+      interruptLatestAssistantStream(activeChatId)
+      activeGenerationIdRef.current = null
+      setInputLoading(false)
+    } catch (error) {
+      console.error('Failed to cancel generation:', error)
+      streamClientRef.current?.abort()
+      interruptLatestAssistantStream(activeChatId, '取消请求失败，已停止本地接收')
+      activeGenerationIdRef.current = null
+      setInputLoading(false)
+      message.warning('服务端取消失败，已停止本地接收')
+    }
   }
 
   const retryAssistantMessage = (

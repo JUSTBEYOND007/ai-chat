@@ -5,14 +5,16 @@ export type AgentToolExecutionStatus =
   | 'pending'
   | 'running'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'cancelled';
 
 export type AgentRunStatus =
   | 'planning'
   | 'tool_running'
   | 'answering'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'cancelled';
 
 export interface AgentStep {
   stepId: string;

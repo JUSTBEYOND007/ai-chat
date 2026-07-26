@@ -13,6 +13,7 @@
 - [Query Rewrite 与 PostgreSQL 双路召回](./2026-07-25-query-rewrite-and-dual-recall.md)
 - [RRF、阈值、结果多样性与 RAG Token Budget](./2026-07-25-rrf-threshold-diversity-selection.md)
 - [Hybrid RAG 真实评测远程执行 Prompt](./2026-07-25-hybrid-rag-evaluation-remote-execution-prompt.md)
+- [端到端生成取消与竞态控制](./2026-07-25-end-to-end-generation-cancellation.md)
 
 项目的每次功能、接口、数据结构、配置、安全策略或用户交互修改，都必须同步新增或更新一份 Markdown 技术文档。
 

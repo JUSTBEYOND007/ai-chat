@@ -40,6 +40,19 @@ export const sendChatMessage = (data: SendMessageType): Promise<Data<object>> =>
   return request('chat/sendMessage', 'POST', data)
 }
 
+export type CancelGenerationResult = {
+  generationId: string
+  status: 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled'
+  alreadyTerminal: boolean
+}
+
+export const cancelChatGeneration = (chatId: string, generationId: string) => {
+  return request<CancelGenerationResult>(
+    `chat/${chatId}/generations/${generationId}/cancel`,
+    'POST'
+  )
+}
+
 export type CreateSSEOptions = {
   generationId?: string
   afterSeq?: number

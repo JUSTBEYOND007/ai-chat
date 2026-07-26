@@ -443,11 +443,13 @@ export class KnowledgeService implements OnModuleInit {
     knowledgeBaseId: string,
     query: string,
     topK = 5,
+    options: KnowledgeRetrievalOptions = {},
   ): Promise<RetrievedChunk[]> {
     const trace = await this.searchKnowledgeBaseWithTrace(
       knowledgeBaseId,
       query,
       topK,
+      options,
     );
 
     return trace.candidates
@@ -477,6 +479,7 @@ export class KnowledgeService implements OnModuleInit {
     options: KnowledgeRetrievalOptions = {},
   ): Promise<RetrievalTrace> {
     const totalStartedAt = Date.now();
+    this.throwIfAborted(options.signal);
     const strategy = options.strategy || 'vector_baseline';
     const rewriteResult = await this.queryRewriteService.rewrite({
       query,
@@ -485,7 +488,9 @@ export class KnowledgeService implements OnModuleInit {
         (strategy === 'vector_baseline' ? 'never' : 'auto'),
       history: options.history,
       summary: options.summary,
+      signal: options.signal,
     });
+    this.throwIfAborted(options.signal);
     const effectiveQuery = rewriteResult.effectiveQuery;
 
     if (strategy === 'vector_baseline') {
@@ -493,6 +498,7 @@ export class KnowledgeService implements OnModuleInit {
         knowledgeBaseId,
         effectiveQuery,
         topK,
+        options.signal,
       );
       const candidates = vectorResult.rows.map((row, index) =>
         this.toRetrievalCandidate(row, {
@@ -539,11 +545,17 @@ export class KnowledgeService implements OnModuleInit {
     const vectorLimit = Math.max(topK, this.vectorCandidateLimit);
     const keywordLimit = Math.max(topK, this.keywordCandidateLimit);
     const [vectorOutcome, keywordOutcome] = await Promise.allSettled([
-      this.searchVectorChannel(knowledgeBaseId, effectiveQuery, vectorLimit),
+      this.searchVectorChannel(
+        knowledgeBaseId,
+        effectiveQuery,
+        vectorLimit,
+        options.signal,
+      ),
       this.searchKeywordChannel(
         knowledgeBaseId,
         effectiveQuery,
         keywordLimit,
+        options.signal,
       ),
     ]);
     const channelTraces: RetrievalChannelTrace[] = [];
@@ -656,9 +668,17 @@ export class KnowledgeService implements OnModuleInit {
     query: string,
     topK: number,
     userId: number,
+    signal?: AbortSignal,
   ): Promise<KnowledgeSource[]> {
     await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
-    const chunks = await this.searchKnowledgeBase(knowledgeBaseId, query, topK);
+    this.throwIfAborted(signal);
+    const chunks = await this.searchKnowledgeBase(
+      knowledgeBaseId,
+      query,
+      topK,
+      { signal },
+    );
+    this.throwIfAborted(signal);
     return this.toSources(chunks);
   }
 
@@ -682,10 +702,13 @@ export class KnowledgeService implements OnModuleInit {
     knowledgeBaseId: string,
     query: string,
     limit: number,
+    signal?: AbortSignal,
   ) {
+    this.throwIfAborted(signal);
     const totalStartedAt = Date.now();
     const embeddingStartedAt = Date.now();
     const embedding = await this.embeddings.embedQuery(query);
+    this.throwIfAborted(signal);
     const embeddingMs = Date.now() - embeddingStartedAt;
     this.assertEmbeddingDimension(embedding);
     const vector = this.toPgVector(embedding);
@@ -712,6 +735,7 @@ export class KnowledgeService implements OnModuleInit {
       `,
       [vector, knowledgeBaseId, limit, KnowledgeDocumentStatus.INDEXED],
     )) as RetrievedChunk[];
+    this.throwIfAborted(signal);
 
     return {
       rows,
@@ -725,7 +749,9 @@ export class KnowledgeService implements OnModuleInit {
     knowledgeBaseId: string,
     query: string,
     limit: number,
+    signal?: AbortSignal,
   ) {
+    this.throwIfAborted(signal);
     const searchQuery = this.buildKeywordSearchQuery(query);
     if (!searchQuery) {
       return { rows: [] as RetrievedChunk[], searchMs: 0, searchQuery };
@@ -763,6 +789,7 @@ export class KnowledgeService implements OnModuleInit {
         searchQuery,
       ],
     )) as RetrievedChunk[];
+    this.throwIfAborted(signal);
 
     return {
       rows,
@@ -821,6 +848,16 @@ export class KnowledgeService implements OnModuleInit {
         Math.min(...right.channels.map((channel) => channel.rank))
       );
     });
+  }
+
+  private throwIfAborted(signal?: AbortSignal) {
+    if (!signal?.aborted) {
+      return;
+    }
+
+    throw signal.reason instanceof Error
+      ? signal.reason
+      : new Error('知识库检索已取消');
   }
 
   private toRetrievalCandidate(

@@ -55,6 +55,7 @@ describe('KnowledgeSearchTool', () => {
       '如何实现断点续传？',
       3,
       42,
+      undefined,
     );
   });
 });

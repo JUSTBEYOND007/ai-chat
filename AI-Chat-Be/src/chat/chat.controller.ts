@@ -133,12 +133,14 @@ export class ChatController {
   @Sse('getChat/:id')
   streamEvents(
     @Param('id') id: string,
+    @Req() request: Request,
     @Query('generationId') generationId?: string,
     @Query('afterSeq') afterSeq?: string,
   ): Observable<MessageEvent> {
     console.log('streamEvents', id);
-    return this.chatService.getStreamEvents(
+    return this.chatService.getOwnedStreamEvents(
       id,
+      request.user.userId,
       generationId,
       Number(afterSeq || 0),
     );
@@ -165,6 +167,24 @@ export class ChatController {
 
     return {
       msg: '消息已发送并开始处理',
+      data: result,
+    };
+  }
+
+  @Post(':chatId/generations/:generationId/cancel')
+  async cancelGeneration(
+    @Param('chatId') chatId: string,
+    @Param('generationId') generationId: string,
+    @Req() request: Request,
+  ) {
+    const result = await this.chatService.cancelGeneration(
+      chatId,
+      generationId,
+      request.user.userId,
+    );
+
+    return {
+      msg: result.alreadyTerminal ? '生成已处于终态' : '生成已取消',
       data: result,
     };
   }

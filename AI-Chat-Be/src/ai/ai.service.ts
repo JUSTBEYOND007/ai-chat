@@ -72,16 +72,19 @@ export class AiService {
     return `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
   }
 
-  async getAiWithFile(filePath: string) {
+  async getAiWithFile(filePath: string, signal?: AbortSignal) {
     const localFilePath = this.getLocalFilePath(filePath);
 
     console.log('Converted local file path:', localFilePath);
 
-    const fileObject = await this.openai.files.create({
-      file: fs.createReadStream(localFilePath),
-      // DashScope accepts OpenAI-compatible file extraction purpose.
-      purpose: 'file-extract' as any,
-    });
+    const fileObject = await this.openai.files.create(
+      {
+        file: fs.createReadStream(localFilePath),
+        // DashScope accepts OpenAI-compatible file extraction purpose.
+        purpose: 'file-extract' as any,
+      },
+      { signal },
+    );
 
     return `fileid://${fileObject.id}`;
   }
@@ -108,12 +111,19 @@ export class AiService {
     return [messageContent, imgContent];
   }
 
-  async getMain(message: string, filePath: string, imgUrl?: string[]) {
+  async getMain(
+    message: string,
+    filePath: string,
+    imgUrl?: string[],
+    signal?: AbortSignal,
+  ) {
     const isImage = isImageByExtension(filePath);
     const model = isImage ? this.visionModel : this.textModel;
 
     const content =
-      filePath && !isImage ? await this.getAiWithFile(filePath) : this.defaultMessage;
+      filePath && !isImage
+        ? await this.getAiWithFile(filePath, signal)
+        : this.defaultMessage;
 
     const userContent = isImage
       ? this.getAiWithImg(
@@ -122,17 +132,20 @@ export class AiService {
         )
       : message;
 
-    const completion = await this.openai.chat.completions.create({
-      model,
-      messages: [
-        { role: 'system', content },
-        { role: 'user', content: userContent },
-      ],
-      stream: true,
-      stream_options: {
-        include_usage: true,
+    const completion = await this.openai.chat.completions.create(
+      {
+        model,
+        messages: [
+          { role: 'system', content },
+          { role: 'user', content: userContent },
+        ],
+        stream: true,
+        stream_options: {
+          include_usage: true,
+        },
       },
-    });
+      { signal },
+    );
 
     return completion;
   }

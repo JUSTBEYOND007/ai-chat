@@ -53,6 +53,7 @@ export class KnowledgeSearchTool
       input.query,
       input.topK,
       context.userId,
+      context.signal,
     );
 
     return {

@@ -7,7 +7,15 @@ import type {
 } from '@pc/types/chat'
 import type { KnowledgeSource } from '@pc/types/rag'
 
-export type StreamStatus = 'idle' | 'connecting' | 'streaming' | 'recovering' | 'completed' | 'aborted' | 'error'
+export type StreamStatus =
+  | 'idle'
+  | 'connecting'
+  | 'streaming'
+  | 'recovering'
+  | 'completed'
+  | 'cancelled'
+  | 'aborted'
+  | 'error'
 
 export type StreamConnectionOptions = {
   generationId?: string
@@ -24,6 +32,7 @@ export type StreamChatClientOptions = {
   onChunk: (chunk: string) => void
   onAgentEvent?: (event: AgentStreamEvent) => void
   onComplete?: (content: string, metadata?: StreamCompleteMetadata) => void
+  onCancelled?: (content: string, generationId?: string) => void
   onError?: (error: unknown) => void
   onStatusChange?: (status: StreamStatus) => void
 }
@@ -65,6 +74,13 @@ type StreamMessage =
       seq?: number
       timestamp?: number
     }
+  | {
+      type: 'cancelled'
+      content?: string
+      generationId: string
+      seq?: number
+      timestamp?: number
+    }
   | AgentStreamEvent
 
 export class StreamChatClient {
@@ -88,10 +104,11 @@ export class StreamChatClient {
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 1
   }
 
-  start(chatId: string) {
+  start(chatId: string, generationId?: string) {
     this.close()
     this.resetRenderState()
     this.chatId = chatId
+    this.generationId = generationId
     this.closedByClient = false
     this.reconnectAttempts = 0
     this.setStatus('connecting')
@@ -239,6 +256,15 @@ export class StreamChatClient {
       this.flushAll()
       this.setStatus('error')
       this.options.onError?.(data.error || data.content || 'Stream error')
+      this.close()
+      return
+    }
+
+    if (data.type === 'cancelled') {
+      this.flushAll()
+      this.fullContent = data.content || this.fullContent
+      this.setStatus('cancelled')
+      this.options.onCancelled?.(this.fullContent, data.generationId)
       this.close()
     }
   }

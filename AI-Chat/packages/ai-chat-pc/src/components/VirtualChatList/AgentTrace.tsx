@@ -41,6 +41,7 @@ const getStepTitle = (step: ChatAgentStep) => {
 
 const getStepStatusText = (step: ChatAgentStep) => {
   if (step.status === 'running') return '进行中'
+  if (step.status === 'cancelled') return '已取消'
   if (step.status === 'interrupted') return '已中断'
   if (step.status === 'failed') return '失败'
   if (step.status === 'completed') return '完成'
@@ -74,7 +75,9 @@ export const AgentTrace = ({
   const summary = useMemo(() => {
     const toolCount = steps.filter((step) => step.type === 'tool').length
     const failed = steps.some((step) => step.status === 'failed')
-    const interrupted = steps.some((step) => step.status === 'interrupted')
+    const interrupted = steps.some(
+      (step) => step.status === 'interrupted' || step.status === 'cancelled'
+    )
     const running = steps.some((step) => step.status === 'running')
     const durationMs = steps.reduce((total, step) => total + (step.durationMs || 0), 0)
 

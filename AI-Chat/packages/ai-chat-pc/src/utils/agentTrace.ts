@@ -144,7 +144,7 @@ export const interruptAgentSteps = (
           ...step,
           status:
             error.code === 'INTERRUPTED'
-              ? ('interrupted' as const)
+              ? ('cancelled' as const)
               : ('failed' as const),
           completedAt,
           durationMs: Math.max(0, completedAt - step.startedAt),
