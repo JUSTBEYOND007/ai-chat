@@ -214,14 +214,20 @@ describe('AgentContextBuilder', () => {
     expect(result.usage.overBudget).toBe(false);
   });
 
-  it('serializes oversized tool output into a bounded structured preview', () => {
-    const builder = createBuilder({ AGENT_TOOL_RESULT_TOKEN_BUDGET: '256' });
+  it('serializes oversized RAG context into its independent token budget', () => {
+    const builder = createBuilder({ RAG_CONTEXT_TOKEN_BUDGET: '256' });
     const serialized = builder.serializeToolResult({
       toolCallId: 'tool-call',
       toolName: 'knowledge_search',
       status: 'completed',
       input: { query: 'Flow-Chat' },
-      output: { sources: [{ content: '检索内容'.repeat(600) }] },
+      output: {
+        code: 'OK',
+        query: 'Flow-Chat',
+        effectiveQuery: 'Flow-Chat',
+        sources: [{ content: '检索内容'.repeat(600) }],
+        retrievalTrace: { candidates: ['不会送入模型'] },
+      },
       startedAt: 1,
       completedAt: 2,
       durationMs: 1,
@@ -235,5 +241,40 @@ describe('AgentContextBuilder', () => {
       }),
     );
     expect(builder.estimateTextTokens(serialized)).toBeLessThanOrEqual(256);
+  });
+
+  it('keeps retrieval history and summary scoped to the selected knowledge base', () => {
+    const builder = createBuilder();
+    const retrievalContext = builder.buildRetrievalContext(
+      [
+        historyMessage({
+          id: 'user-1',
+          role: 'user',
+          content: '介绍一下知识库。',
+          createdAt: 1,
+        }),
+        historyMessage({
+          id: 'other-kb',
+          role: 'assistant',
+          content: '另一个知识库的回答。',
+          knowledgeBaseId: 'other-kb',
+          createdAt: 2,
+        }),
+      ],
+      {
+        scopeKey: 'kb-id',
+        content: '当前知识库摘要',
+        throughMessageId: 'user-1',
+        summarizedMessageCount: 1,
+        updatedAt: 1,
+        version: 1,
+      },
+      { ...context, knowledgeBaseId: 'kb-id' },
+    );
+
+    expect(retrievalContext).toEqual({
+      history: [{ role: 'user', content: '介绍一下知识库。' }],
+      summary: '当前知识库摘要',
+    });
   });
 });

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ChatAgentStep, ChatContextUsage } from '@pc/types/chat'
+import { getKnowledgeSearchOutput, RetrievalTracePanel } from './RetrievalTracePanel'
 
 type AgentTraceProps = {
   steps: ChatAgentStep[]
@@ -11,9 +12,7 @@ const formatDuration = (durationMs?: number) => {
   if (typeof durationMs !== 'number') {
     return ''
   }
-  return durationMs < 1000
-    ? `${durationMs}ms`
-    : `${(durationMs / 1000).toFixed(1)}s`
+  return durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`
 }
 
 const stringifyPreview = (value: unknown) => {
@@ -66,11 +65,7 @@ const getToolOutputSummary = (step: ChatAgentStep) => {
   return undefined
 }
 
-export const AgentTrace = ({
-  steps,
-  contextUsage,
-  isStreaming = false
-}: AgentTraceProps) => {
+export const AgentTrace = ({ steps, contextUsage, isStreaming = false }: AgentTraceProps) => {
   const [expanded, setExpanded] = useState(true)
   const summary = useMemo(() => {
     const toolCount = steps.filter((step) => step.type === 'tool').length
@@ -145,19 +140,16 @@ export const AgentTrace = ({
           ) : null}
           {steps.map((step) => {
             const outputSummary = getToolOutputSummary(step)
+            const knowledgeSearchOutput = getKnowledgeSearchOutput(step.output)
             return (
-              <div
-                key={step.stepId}
-                className={`agent-trace-step agent-trace-step-${step.status}`}>
+              <div key={step.stepId} className={`agent-trace-step agent-trace-step-${step.status}`}>
                 <span className="agent-trace-step-dot" />
                 <div className="agent-trace-step-content">
                   <div className="agent-trace-step-heading">
                     <span>{getStepTitle(step)}</span>
                     <span className="agent-trace-step-meta">
                       {getStepStatusText(step)}
-                      {step.durationMs !== undefined
-                        ? ` · ${formatDuration(step.durationMs)}`
-                        : ''}
+                      {step.durationMs !== undefined ? ` · ${formatDuration(step.durationMs)}` : ''}
                     </span>
                   </div>
                   {step.type !== 'answer' && step.message ? (
@@ -166,9 +158,12 @@ export const AgentTrace = ({
                   {outputSummary ? (
                     <div className="agent-trace-output-summary">{outputSummary}</div>
                   ) : null}
+                  {knowledgeSearchOutput ? (
+                    <RetrievalTracePanel output={knowledgeSearchOutput} />
+                  ) : null}
                   {step.type === 'tool' &&
                   (step.input !== undefined ||
-                    step.output !== undefined ||
+                    (step.output !== undefined && !knowledgeSearchOutput) ||
                     step.error !== undefined) ? (
                     <details className="agent-trace-details">
                       <summary>查看参数与结果</summary>
@@ -178,7 +173,7 @@ export const AgentTrace = ({
                           <pre>{stringifyPreview(step.input)}</pre>
                         </div>
                       ) : null}
-                      {step.output !== undefined ? (
+                      {step.output !== undefined && !knowledgeSearchOutput ? (
                         <div>
                           <div className="agent-trace-detail-label">输出</div>
                           <pre>{stringifyPreview(step.output)}</pre>

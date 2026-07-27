@@ -22,6 +22,7 @@ export class AgentContextBuilder {
   private readonly responseReserveTokens: number;
   private readonly maxHistoryMessages: number;
   private readonly toolResultBudgetTokens: number;
+  private readonly ragContextTokenBudget: number;
   private readonly summaryContextTokenBudget: number;
 
   constructor(configService: ConfigService) {
@@ -49,6 +50,12 @@ export class AgentContextBuilder {
       256,
       8_000,
     );
+    this.ragContextTokenBudget = this.readBoundedInteger(
+      configService.get<string>('RAG_CONTEXT_TOKEN_BUDGET'),
+      4_000,
+      256,
+      16_000,
+    );
     this.summaryContextTokenBudget = this.readBoundedInteger(
       configService.get<string>('AGENT_SUMMARY_CONTEXT_TOKEN_BUDGET'),
       1_200,
@@ -67,7 +74,10 @@ export class AgentContextBuilder {
       role: 'system',
       content: this.buildSystemPrompt(Boolean(context.knowledgeBaseId)),
     };
-    const currentMessage: AgentModelMessage = { role: 'user', content: message };
+    const currentMessage: AgentModelMessage = {
+      role: 'user',
+      content: message,
+    };
     const systemTokens = this.estimateMessageTokens(systemMessage);
     const currentMessageTokens = this.estimateMessageTokens(currentMessage);
     const mandatoryTokens = systemTokens + currentMessageTokens;
@@ -143,7 +153,8 @@ export class AgentContextBuilder {
       }
     }
 
-    const estimatedInputTokens = mandatoryTokens + summaryTokens + historyTokens;
+    const estimatedInputTokens =
+      mandatoryTokens + summaryTokens + historyTokens;
 
     return {
       messages: [
@@ -164,6 +175,7 @@ export class AgentContextBuilder {
         droppedHistoryMessages,
         truncatedHistoryMessages,
         toolResultBudgetTokens: this.toolResultBudgetTokens,
+        ragContextTokenBudget: this.ragContextTokenBudget,
         usedSummary: Boolean(summarySelection.message),
         summarizedMessageCount: summarySelection.message
           ? summary?.summarizedMessageCount
@@ -225,14 +237,15 @@ export class AgentContextBuilder {
   }
 
   serializeToolResult(result: AgentToolExecutionResult) {
-    const payload =
-      result.status === 'completed'
-        ? { status: result.status, output: result.output }
-        : { status: result.status, error: result.error };
+    const payload = this.buildModelToolResultPayload(result);
     const serialized = JSON.stringify(payload);
+    const tokenBudget =
+      result.status === 'completed' && result.toolName === 'knowledge_search'
+        ? this.ragContextTokenBudget
+        : this.toolResultBudgetTokens;
     const estimatedTokens = this.estimateTextTokens(serialized);
 
-    if (estimatedTokens <= this.toolResultBudgetTokens) {
+    if (estimatedTokens <= tokenBudget) {
       return serialized;
     }
 
@@ -249,7 +262,7 @@ export class AgentContextBuilder {
         preview: serialized.slice(0, middle),
       });
 
-      if (this.estimateTextTokens(candidate) <= this.toolResultBudgetTokens) {
+      if (this.estimateTextTokens(candidate) <= tokenBudget) {
         boundedPayload = candidate;
         lower = middle + 1;
       } else {
@@ -261,6 +274,54 @@ export class AgentContextBuilder {
       boundedPayload ||
       JSON.stringify({ status: result.status, truncated: true })
     );
+  }
+
+  buildRetrievalContext(
+    history: AgentHistoryMessage[] = [],
+    summary: AgentMemorySummary | undefined,
+    context: AgentContext,
+  ) {
+    const normalizedHistory = this.normalizeHistory(history, context).map(
+      (message) => ({
+        role: message.role,
+        content: message.content,
+      }),
+    );
+    const expectedScopeKey = context.knowledgeBaseId || 'general';
+
+    return {
+      history: normalizedHistory,
+      summary:
+        summary?.scopeKey === expectedScopeKey ? summary.content : undefined,
+    };
+  }
+
+  private buildModelToolResultPayload(result: AgentToolExecutionResult) {
+    if (result.status === 'failed') {
+      return { status: result.status, error: result.error };
+    }
+
+    if (result.toolName !== 'knowledge_search') {
+      return { status: result.status, output: result.output };
+    }
+
+    const output =
+      result.output && typeof result.output === 'object'
+        ? (result.output as Record<string, unknown>)
+        : {};
+
+    return {
+      status: result.status,
+      output: {
+        code: output.code,
+        query: output.query,
+        effectiveQuery: output.effectiveQuery,
+        knowledgeBaseId: output.knowledgeBaseId,
+        ragContext: {
+          sources: Array.isArray(output.sources) ? output.sources : [],
+        },
+      },
+    };
   }
 
   private normalizeHistory(
@@ -352,7 +413,8 @@ export class AgentContextBuilder {
       return { message: undefined, tokens: 0 };
     }
 
-    const prefix = '以下是当前会话较早内容的压缩记忆。仅用于理解用户指代和持续偏好；若与最近消息冲突，以最近消息为准：\n';
+    const prefix =
+      '以下是当前会话较早内容的压缩记忆。仅用于理解用户指代和持续偏好；若与最近消息冲突，以最近消息为准：\n';
     const contentBudget = Math.min(
       this.summaryContextTokenBudget,
       Math.max(availableTokens - 4, 0),
@@ -388,6 +450,7 @@ export class AgentContextBuilder {
         : '当前没有选择知识库，不得声称已经检索用户文档。'
     }
 4. 工具失败时，根据结构化错误说明原因；不要编造不存在的工具结果。
+   knowledge_search 返回 NO_RELIABLE_CONTEXT 时，明确说明知识库中没有找到可靠依据，并请用户补充信息；不得继续猜测。
 5. 对依赖上文的追问，应结合提供的历史消息理解指代，但不得混用其他知识库的历史结论。
 6. 最终使用中文清晰回答，并在使用知识库时忠实依据检索片段。`;
   }

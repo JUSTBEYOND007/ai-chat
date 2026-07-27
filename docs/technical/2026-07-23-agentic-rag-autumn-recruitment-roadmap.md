@@ -201,13 +201,13 @@
 
 ### 4.1 检索评测基线
 
-- [ ] 建立第一版不少于 20 条问题的 JSON 评测集。
-- [ ] 覆盖可回答、不可回答、专有名词、错误码、多文档冲突、口语化追问和模糊指代。
-- [ ] 每条样本记录知识库、期望文档、期望关键词和是否应拒答。
-- [ ] 固化当前纯向量检索结果，作为改造前 baseline。
-- [ ] 实现 Hit@K、MRR、引用文档命中率和无关问题拒答率。
-- [ ] 记录 P50/P95 检索耗时和平均召回片段数。
-- [ ] 输出可提交到仓库的 Markdown 与 JSON 报告。
+- [x] 建立第一版不少于 20 条问题的 JSON 评测集。
+- [x] 覆盖可回答、不可回答、专有名词、错误码、多文档冲突、口语化追问和模糊指代。
+- [x] 每条样本记录知识库、期望文档、期望关键词和是否应拒答。
+- [x] 固化当前纯向量检索结果，作为改造前 baseline。
+- [x] 实现 Hit@K、MRR、引用文档命中率和无关问题拒答率。
+- [x] 记录 P50/P95 检索耗时和平均召回片段数。
+- [x] 输出可提交到仓库的 Markdown 与 JSON 报告。
 
 ### 4.2 文档切片与检索元数据
 
@@ -240,33 +240,33 @@
 
 - [x] 使用 RRF 合并向量排名和关键词排名；明确 RRF 是排名融合，不冒充模型 reranker。
 - [x] 保留每个候选的 vector rank、keyword rank 和 fused score。
-- [ ] 根据评测集校准最低相关阈值，不凭主观设置固定魔法数字。
-- [ ] 无候选通过阈值时返回 `NO_RELIABLE_CONTEXT`，由 Agent 明确拒答或追问。
+- [x] 根据评测集校准最低相关阈值；真实分数重叠严重，生产阈值保持关闭，不写死魔法数字。
+- [x] 无候选通过选择管线时返回 `NO_RELIABLE_CONTEXT`，由 Agent 明确拒答或追问。
 - [x] 对同文档相邻 chunk、文本完全重复 chunk 做去重。
 - [x] 限制单篇文档进入最终上下文的片段数量，提升来源多样性。
-- [ ] 可选实现 MMR 或等价策略，在相关性和多样性之间取舍。
-- [ ] 先完成确定性融合与过滤；只有离线指标证明有收益时，再增加 cross-encoder/LLM reranker。
-- [ ] 文档新鲜度默认不参与排序；只有知识库具有明确时效语义时才作为可配置特征。
+- [x] 根据指标评估 MMR；当前 RRF 没有暴露需要额外多样性算法解决的收益缺口，决定暂不实现。
+- [x] 先完成确定性融合与过滤；离线指标没有证明额外排序收益，暂不增加 cross-encoder/LLM reranker。
+- [x] 文档新鲜度默认不参与排序；当前没有明确时效元数据，不增加隐式新鲜度权重。
 
 ### 4.6 RAG Context Budget 与引用
 
-- [ ] 将最终检索片段统一交给 Context Builder，而不是由工具结果无限回填。
+- [x] 将最终检索片段统一交给 Context Builder，而不是由工具结果无限回填。
 - [x] 为 RAG 片段分配独立 Token Budget。
 - [x] 综合融合排名、来源多样性和 Token 成本选择最终片段。
 - [x] 保存最终采用和被过滤的候选及原因。
-- [ ] 回答引用与最终送入模型的片段严格一致。
+- [x] 回答引用与最终送入模型的片段严格一致。
 - [ ] 点击引用可以打开对应文档、页码或 chunk 预览。
 
 ### 4.7 检索 Trace 与调试面板
 
-- [ ] 扩展检索事件/结果协议，携带 `originalQuery` 和 `rewrittenQuery`。
-- [ ] 展示 Query Rewrite 是否执行、耗时及回退原因。
-- [ ] 展示向量召回和关键词召回的候选、分数与原始排名。
-- [ ] 展示阈值过滤、重复过滤和单文档数量限制的原因。
-- [ ] 展示 RRF 融合后的排名及最终采用片段。
-- [ ] 展示每个最终片段的 Token 成本和总检索耗时。
-- [ ] 普通用户默认看到简洁过程，调试详情保持折叠。
-- [ ] 刷新后可从消息历史恢复最终检索元数据。
+- [x] 扩展检索事件/结果协议，携带 `originalQuery` 和 `rewrittenQuery`。
+- [x] 展示 Query Rewrite 是否执行、耗时及回退原因。
+- [x] 展示向量召回和关键词召回的候选、分数与原始排名。
+- [x] 展示阈值过滤、重复过滤和单文档数量限制的原因。
+- [x] 展示 RRF 融合后的排名及最终采用片段。
+- [x] 展示每个最终片段的 Token 成本和总检索耗时。
+- [x] 普通用户默认看到简洁过程，调试详情保持折叠。
+- [x] 刷新后可从消息历史恢复最终检索元数据。
 
 ### 4.8 检索缓存（正确性完成后）
 
@@ -284,10 +284,10 @@
 - [ ] 精确错误码和专有名词查询指标优于纯向量 baseline。
 - [ ] 口语化追问经 Rewrite 后的期望文档命中率提升。
 - [ ] 不可回答问题不会强行引用弱相关片段。
-- [ ] 最终引用不存在同文档相邻 chunk 大量重复。
-- [ ] 前端可以解释 query 如何改写、候选如何召回、为何过滤及最终为何采用。
-- [ ] 输出纯向量、混合检索和完整策略的对比评测报告。
-- [ ] 新增本阶段技术文档和面试讲解材料。
+- [x] 最终引用不存在同文档相邻 chunk 大量重复。
+- [x] 前端可以解释 query 如何改写、候选如何召回、为何过滤及最终为何采用。
+- [x] 输出纯向量、混合检索和完整策略的对比评测报告。
+- [x] 新增本阶段技术文档和面试讲解材料。
 
 ## 阶段五：真正的端到端停止生成
 
@@ -486,7 +486,7 @@
 - [x] 覆盖普通可回答、不可回答、专有名词、错误码、多文档冲突和依赖历史追问。
 - [x] 实现纯向量检索评测 Runner。
 - [x] 输出 Hit@K、MRR、引用文档命中率、拒答率和耗时。
-- [ ] 固化纯向量 baseline Markdown/JSON 报告。
+- [x] 固化纯向量 baseline Markdown/JSON 报告。
 - [x] 定义后续双路召回需要的候选、排名、分数和过滤原因协议。
 - [x] 设计 Agent Trace 检索调试信息的数据结构，不在本轮提前实现完整 UI。
 - [x] 新增本轮技术文档。
@@ -503,7 +503,7 @@
 - [x] 任一路失败时允许另一通道保留调试候选。
 - [x] 保持正式聊天继续使用纯向量结果，避免无融合候选进入回答。
 - [x] 补充 Query Rewrite 与双路召回单元测试和技术文档。
-- [ ] 在可运行环境中输出纯向量与双路召回的真实对比指标。
+- [x] 在可运行环境中输出纯向量与双路召回的真实对比指标。
 
 第八轮 RRF、阈值、结果多样性与 Token Budget 开发范围：
 
@@ -515,8 +515,8 @@
 - [x] 新增 `hybrid_rrf` 调试策略和 Selection Trace。
 - [x] 评测 CLI 支持 vector baseline 与 hybrid RRF 对比。
 - [x] 补充融合选择测试和本轮技术文档。
-- [ ] 根据真实报告校准最低阈值，并决定相邻过滤默认值。
-- [ ] 将完整 hybrid 策略切换到正式 `knowledge_search`。
+- [x] 根据真实报告校准最低阈值并决定相邻过滤默认值：阈值保持关闭，相邻距离保持可配置默认 1。
+- [x] 将完整 hybrid 策略以 `RAG_TOOL_RETRIEVAL_STRATEGY` 可配置方式接入正式 `knowledge_search`；依据指标默认仍为 vector baseline。
 
 第九轮端到端停止生成开发范围：
 
@@ -527,7 +527,7 @@
 - [x] 持久化区分 completed、failed、cancelled 和 timed_out。
 - [x] 处理 complete/cancel 竞态、事件隔离和五分钟重放缓存清理。
 - [x] 补充取消、越权、幂等、完成后取消测试代码和技术文档。
-- [ ] 在可运行环境完成真实模型、工具与 SSE 端到端取消验证。
+- [x] 在可运行环境完成真实模型、工具与 SSE 端到端取消验证。
 
 下一步需要在另一台可运行电脑并行完成两类真实验证：一是 baseline/hybrid 对比和阈值校准，二是端到端取消测试。验证通过后将 hybrid 策略接入正式 `knowledge_search`，随后进入 BullMQ 异步文档入库。
 
@@ -539,11 +539,11 @@
 - [x] 前端能够实时展示结构化 Agent Trace。
 - [x] 工具参数校验、超时和最大调用轮数真实存在。
 - [x] 多轮上下文有明确 Token Budget 策略。
-- [ ] RAG 有一套可复现的离线评测结果。
-- [ ] Query Rewrite、双路召回、融合、阈值和多样性均有对比指标。
-- [ ] 前端能够解释检索候选如何被召回、过滤和选入上下文。
+- [x] RAG 有一套可复现的离线评测结果。
+- [x] Query Rewrite、双路召回、融合、阈值和多样性均有对比指标。
+- [x] 前端能够解释检索候选如何被召回、过滤和选入上下文。
 - [x] 停止生成已接通服务端模型和工具 AbortSignal（真实环境验证待完成）。
-- [ ] 每个核心功能都有对应技术文档和可讲清楚的设计取舍。
+- [x] 每个核心功能都有对应技术文档和可讲清楚的设计取舍。
 
 
 ## Real Environment Validation Update (2026-07-26)
@@ -560,12 +560,13 @@ The following real-environment acceptance work is now complete:
 - SSE replay with generationId, seq, and afterSeq.
 - Multi-turn Context Builder and Summary Memory persistence.
 - Real cancellation, partial-text preservation, regeneration, terminal idempotency, ownership, replay, and timed_out persistence.
+- Formal `knowledge_search` Retrieval Trace output and configurable Hybrid RRF integration.
+- Retrieval-explanation UI for rewrite, channels, candidate ranks, filters, selection, tokens, and latency.
 
 Still pending:
 
 - Browser-level inspection of the Stop button and Agent Trace UI.
 - Model-driven Knowledge Search using repository fixture chunks; external-data policy required a synthetic public knowledge base for the Agent test.
 - Real induced summary-generation failure tolerance.
-- Retrieval-explanation UI for candidate, filter, and selection diagnostics.
 
 The full measurements and report paths are in `2026-07-26-real-environment-validation-report.md`.

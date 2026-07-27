@@ -131,6 +131,107 @@ describe('KnowledgeService focused behavior', () => {
     expect(dataSourceMock.query).not.toHaveBeenCalled();
   });
 
+  it('returns the formal tool sources together with a persisted retrieval trace', async () => {
+    repositoryMock.findOne.mockResolvedValueOnce({
+      id: 'knowledge-base-id',
+      userId: 42,
+      isActive: true,
+    });
+    dataSourceMock.query.mockResolvedValueOnce([
+      {
+        id: 'chunk-1',
+        documentId: 'doc-1',
+        knowledgeBaseId: 'knowledge-base-id',
+        chunkIndex: 0,
+        content: 'Flow-Chat 使用 generationId 和 seq 重放事件。',
+        tokenCount: 20,
+        fileName: 'streaming.md',
+        score: '0.9',
+      },
+    ]);
+
+    const result = await service.searchForTool(
+      'knowledge-base-id',
+      '如何重放事件？',
+      5,
+      42,
+    );
+
+    expect(result.sources).toEqual([
+      expect.objectContaining({
+        documentId: 'doc-1',
+        fileName: 'streaming.md',
+        score: 0.9,
+      }),
+    ]);
+    expect(result.trace).toMatchObject({
+      strategy: 'vector_baseline',
+      originalQuery: '如何重放事件？',
+      candidates: [expect.objectContaining({ selected: true })],
+    });
+  });
+
+  it('supports hybrid RRF in the formal tool path with scoped rewrite context', async () => {
+    (service as any).toolRetrievalStrategy = 'hybrid_rrf';
+    repositoryMock.findOne.mockResolvedValueOnce({
+      id: 'knowledge-base-id',
+      userId: 42,
+      isActive: true,
+    });
+    dataSourceMock.query.mockImplementation(async (sql: string) => {
+      if (sql.includes('websearch_to_tsquery')) {
+        return [
+          {
+            id: 'shared',
+            documentId: 'doc-1',
+            knowledgeBaseId: 'knowledge-base-id',
+            chunkIndex: 0,
+            content: 'afterSeq 只重放更大的 seq。',
+            tokenCount: 10,
+            fileName: 'streaming.md',
+            score: '0.7',
+          },
+        ];
+      }
+      return [
+        {
+          id: 'shared',
+          documentId: 'doc-1',
+          knowledgeBaseId: 'knowledge-base-id',
+          chunkIndex: 0,
+          content: 'afterSeq 只重放更大的 seq。',
+          tokenCount: 10,
+          fileName: 'streaming.md',
+          score: '0.9',
+        },
+      ];
+    });
+
+    const result = await service.searchForTool(
+      'knowledge-base-id',
+      '它怎么重放？',
+      5,
+      42,
+      undefined,
+      {
+        history: [{ role: 'user', content: '介绍 SSE 断流恢复。' }],
+        summary: '会话正在讨论 Flow-Chat SSE。',
+      },
+    );
+
+    expect(queryRewriteServiceMock.rewrite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: '它怎么重放？',
+        mode: 'auto',
+        history: [{ role: 'user', content: '介绍 SSE 断流恢复。' }],
+        summary: '会话正在讨论 Flow-Chat SSE。',
+      }),
+    );
+    expect(result.trace.strategy).toBe('hybrid_rrf');
+    expect(result.trace.selection?.selectedCount).toBe(1);
+    expect(result.sources).toHaveLength(1);
+  });
+
   it('rejects uploaded documents that exceed the size limit before writing them', async () => {
     const writeFileSpy = jest.spyOn(fs.promises, 'writeFile');
 
@@ -170,7 +271,9 @@ describe('KnowledgeService focused behavior', () => {
         chunkCount: 2,
       });
 
-    await expect(service.retryDocument('kb-id', 'document-id', 42)).resolves.toEqual({
+    await expect(
+      service.retryDocument('kb-id', 'document-id', 42),
+    ).resolves.toEqual({
       documentId: 'document-id',
       status: KnowledgeDocumentStatus.INDEXED,
       chunkCount: 2,
@@ -188,7 +291,9 @@ describe('KnowledgeService focused behavior', () => {
       .mockResolvedValueOnce({ id: 'kb-id', userId: 42, isActive: true })
       .mockResolvedValueOnce({ id: 'document-id', knowledgeBaseId: 'kb-id' });
 
-    await expect(service.deleteDocument('kb-id', 'document-id', 42)).resolves.toEqual({
+    await expect(
+      service.deleteDocument('kb-id', 'document-id', 42),
+    ).resolves.toEqual({
       documentId: 'document-id',
       deleted: true,
     });
@@ -196,14 +301,18 @@ describe('KnowledgeService focused behavior', () => {
       id: 'document-id',
       knowledgeBaseId: 'kb-id',
     });
-    expect(repositoryMock.delete).toHaveBeenCalledWith({ documentId: 'document-id' });
+    expect(repositoryMock.delete).toHaveBeenCalledWith({
+      documentId: 'document-id',
+    });
   });
 
   it('rejects uploads paths that resolve outside the uploads directory', async () => {
     const outsidePath = path.join(process.cwd(), 'outside.md');
     const uploadsRoot = path.resolve(process.cwd(), 'uploads');
 
-    jest.spyOn(service as any, 'resolveLocalFilePath').mockReturnValue(outsidePath);
+    jest
+      .spyOn(service as any, 'resolveLocalFilePath')
+      .mockReturnValue(outsidePath);
     jest.spyOn(fs, 'existsSync').mockReturnValue(true);
     jest
       .spyOn(fs.promises, 'realpath')
@@ -228,7 +337,9 @@ describe('KnowledgeService focused behavior', () => {
     const outsidePath = path.join(process.cwd(), 'outside.md');
     const uploadsRoot = path.resolve(process.cwd(), 'uploads');
 
-    jest.spyOn(service as any, 'resolveLocalFilePath').mockReturnValue(outsidePath);
+    jest
+      .spyOn(service as any, 'resolveLocalFilePath')
+      .mockReturnValue(outsidePath);
     jest.spyOn(fs, 'existsSync').mockReturnValue(true);
     jest
       .spyOn(fs.promises, 'realpath')
@@ -248,7 +359,6 @@ describe('KnowledgeService focused behavior', () => {
     ).rejects.toThrow('文件路径非法');
     expect(readFileSpy).not.toHaveBeenCalled();
   });
-
 
   it('saves uploaded files under uploads and indexes them with a safe relative path', async () => {
     const mkdirSpy = jest
@@ -275,9 +385,12 @@ describe('KnowledgeService focused behavior', () => {
       42,
     );
 
-    expect(mkdirSpy).toHaveBeenCalledWith(path.resolve(process.cwd(), 'uploads'), {
-      recursive: true,
-    });
+    expect(mkdirSpy).toHaveBeenCalledWith(
+      path.resolve(process.cwd(), 'uploads'),
+      {
+        recursive: true,
+      },
+    );
     expect(writeFileSpy).toHaveBeenCalledWith(
       expect.stringMatching(/uploads[/\\].+-demo\.md$/),
       Buffer.from('# demo'),

@@ -1,14 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
-import {
-  AgentContext,
-  AgentTool,
-  AgentToolError,
-} from '../contracts';
+import { AgentContext, AgentTool, AgentToolError } from '../contracts';
 import {
   KnowledgeService,
   KnowledgeSource,
 } from 'src/knowledge/knowledge.service';
+import { RetrievalTrace } from 'src/knowledge/contracts/retrieval';
 
 export const knowledgeSearchInputSchema = z.object({
   query: z.string().trim().min(1).max(1_000),
@@ -16,18 +13,21 @@ export const knowledgeSearchInputSchema = z.object({
 });
 
 export interface KnowledgeSearchOutput {
+  code: 'OK' | 'NO_RELIABLE_CONTEXT';
   query: string;
+  effectiveQuery: string;
   knowledgeBaseId: string;
   sources: KnowledgeSource[];
+  retrievalTrace: RetrievalTrace;
 }
 
 @Injectable()
-export class KnowledgeSearchTool
-  implements AgentTool<typeof knowledgeSearchInputSchema, KnowledgeSearchOutput>
-{
+export class KnowledgeSearchTool implements AgentTool<
+  typeof knowledgeSearchInputSchema,
+  KnowledgeSearchOutput
+> {
   readonly name = 'knowledge_search';
-  readonly description =
-    '在当前用户已选择的知识库中检索与问题相关的文档片段。';
+  readonly description = '在当前用户已选择的知识库中检索与问题相关的文档片段。';
   readonly schema = knowledgeSearchInputSchema;
   readonly timeoutMs = 15_000;
 
@@ -48,18 +48,25 @@ export class KnowledgeSearchTool
       );
     }
 
-    const sources = await this.knowledgeService.searchForTool(
+    const result = await this.knowledgeService.searchForTool(
       context.knowledgeBaseId,
       input.query,
       input.topK,
       context.userId,
       context.signal,
+      {
+        history: context.retrievalHistory,
+        summary: context.retrievalSummary,
+      },
     );
 
     return {
+      code: result.sources.length > 0 ? 'OK' : 'NO_RELIABLE_CONTEXT',
       query: input.query,
+      effectiveQuery: result.trace.effectiveQuery,
       knowledgeBaseId: context.knowledgeBaseId,
-      sources,
+      sources: result.sources,
+      retrievalTrace: result.trace,
     };
   }
 }

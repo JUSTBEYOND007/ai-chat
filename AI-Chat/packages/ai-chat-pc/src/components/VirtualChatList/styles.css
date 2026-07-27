@@ -239,6 +239,138 @@
   color: #64748b;
 }
 
+.retrieval-trace-panel {
+  margin-top: 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 9px;
+}
+
+.retrieval-trace-summary,
+.retrieval-trace-channels,
+.retrieval-candidate-ranks,
+.retrieval-filter-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+}
+
+.retrieval-trace-summary {
+  align-items: center;
+  color: #475569;
+}
+
+.retrieval-trace-strategy,
+.retrieval-channel,
+.retrieval-filter-reasons span {
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+
+.retrieval-trace-strategy {
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.retrieval-trace-unreliable {
+  color: #b45309;
+  font-weight: 600;
+}
+
+.retrieval-trace-query {
+  display: grid;
+  gap: 3px;
+  margin-top: 7px;
+  color: #475569;
+  word-break: break-word;
+}
+
+.retrieval-trace-channels {
+  margin-top: 8px;
+}
+
+.retrieval-channel {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.retrieval-channel-failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.retrieval-channel-skipped {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.retrieval-trace-selection {
+  margin-top: 7px;
+  color: #64748b;
+}
+
+.retrieval-candidates {
+  margin-top: 8px;
+}
+
+.retrieval-candidates > summary {
+  cursor: pointer;
+  color: #2563eb;
+  user-select: none;
+}
+
+.retrieval-candidate-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.retrieval-candidate {
+  border-left: 3px solid #cbd5e1;
+  border-radius: 5px;
+  background: #fff;
+  padding: 7px 8px;
+}
+
+.retrieval-candidate-selected {
+  border-left-color: #22c55e;
+  background: #f0fdf4;
+}
+
+.retrieval-candidate-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #334155;
+  font-weight: 500;
+}
+
+.retrieval-candidate-ranks {
+  margin-top: 4px;
+  color: #64748b;
+}
+
+.retrieval-filter-reasons {
+  margin-top: 5px;
+}
+
+.retrieval-filter-reasons span {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.retrieval-candidate p {
+  display: -webkit-box;
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: #64748b;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
 @keyframes agent-trace-pulse {
   0%,
   100% {

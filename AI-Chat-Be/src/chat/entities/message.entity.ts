@@ -82,6 +82,7 @@ export interface MessageContextUsage {
   droppedHistoryMessages: number;
   truncatedHistoryMessages: number;
   toolResultBudgetTokens: number;
+  ragContextTokenBudget?: number;
   usedSummary: boolean;
   summarizedMessageCount?: number;
   summaryUpdatedAt?: number;

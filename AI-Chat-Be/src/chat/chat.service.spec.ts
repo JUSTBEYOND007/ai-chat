@@ -14,6 +14,7 @@ const contextUsage = {
   droppedHistoryMessages: 0,
   truncatedHistoryMessages: 0,
   toolResultBudgetTokens: 2_000,
+  ragContextTokenBudget: 4_000,
   usedSummary: false,
   overBudget: false,
 };
@@ -439,9 +440,7 @@ describe('ChatService', () => {
         },
         1,
       ),
-    ).resolves.toEqual(
-      expect.objectContaining({ status: 'created' }),
-    );
+    ).resolves.toEqual(expect.objectContaining({ status: 'created' }));
     expect(messageRepository.save).toHaveBeenLastCalledWith(
       expect.objectContaining({
         role: MessageRole.SYSTEM,

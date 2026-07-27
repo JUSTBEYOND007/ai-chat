@@ -92,10 +92,102 @@ export type ChatContextUsage = {
   droppedHistoryMessages: number
   truncatedHistoryMessages: number
   toolResultBudgetTokens: number
+  ragContextTokenBudget?: number
   usedSummary: boolean
   summarizedMessageCount?: number
   summaryUpdatedAt?: number
   overBudget: boolean
+}
+
+export type RetrievalChannel = 'vector' | 'keyword' | 'fused'
+
+export type RetrievalFilterReason =
+  | 'below_score_threshold'
+  | 'duplicate_chunk'
+  | 'adjacent_chunk'
+  | 'document_quota_exceeded'
+  | 'token_budget_exceeded'
+  | 'top_k_limit'
+
+export type RetrievalTrace = {
+  version: '1.0'
+  strategy: 'vector_baseline' | 'dual_recall' | 'hybrid_rrf'
+  knowledgeBaseId: string
+  originalQuery: string
+  effectiveQuery: string
+  rewrittenQuery?: string
+  rewrite: {
+    mode: 'never' | 'auto' | 'always'
+    status: 'skipped' | 'rewritten' | 'fallback'
+    reason: string
+    durationMs: number
+    historyMessageCount: number
+    usedSummary: boolean
+    error?: string
+  }
+  topK: number
+  candidates: Array<{
+    candidateId: string
+    documentId: string
+    knowledgeBaseId: string
+    fileName: string
+    chunkIndex: number
+    content: string
+    tokenCount?: number
+    channels: Array<{
+      channel: RetrievalChannel
+      rank: number
+      score: number
+    }>
+    finalRank?: number
+    finalScore?: number
+    selected: boolean
+    filterReasons: RetrievalFilterReason[]
+  }>
+  channels: Array<{
+    channel: RetrievalChannel
+    status: 'completed' | 'skipped' | 'failed'
+    candidateLimit: number
+    candidateCount: number
+    durationMs: number
+    query?: string
+    error?: string
+  }>
+  selection?: {
+    rrfK: number
+    requestedTopK: number
+    selectedCount: number
+    vectorScoreThreshold?: number
+    keywordScoreThreshold?: number
+    maxChunksPerDocument: number
+    adjacentChunkDistance: number
+    tokenBudget: number
+    selectedTokens: number
+  }
+  timings: {
+    rewriteMs: number
+    embeddingMs: number
+    vectorSearchMs: number
+    keywordSearchMs: number
+    fusionMs: number
+    totalMs: number
+  }
+  generatedAt: string
+}
+
+export type KnowledgeSearchToolOutput = {
+  code: 'OK' | 'NO_RELIABLE_CONTEXT'
+  query: string
+  effectiveQuery: string
+  knowledgeBaseId: string
+  sources: Array<{
+    documentId: string
+    fileName: string
+    chunkIndex: number
+    content: string
+    score: number
+  }>
+  retrievalTrace: RetrievalTrace
 }
 
 export type ChatToolExecutionResult = {

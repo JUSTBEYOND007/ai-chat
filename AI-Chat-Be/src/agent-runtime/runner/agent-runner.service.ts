@@ -62,7 +62,9 @@ export class AgentRunner {
     if (context.signal?.aborted) {
       abortFromParent();
     } else {
-      context.signal?.addEventListener('abort', abortFromParent, { once: true });
+      context.signal?.addEventListener('abort', abortFromParent, {
+        once: true,
+      });
     }
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -122,11 +124,7 @@ export class AgentRunner {
         );
       }
       if (context.signal?.aborted) {
-        throw new AgentRunError(
-          'AGENT_CANCELLED',
-          '用户取消了本次生成',
-          state,
-        );
+        throw new AgentRunError('AGENT_CANCELLED', '用户取消了本次生成', state);
       }
       if (error instanceof AgentRunError) {
         throw error;
@@ -160,6 +158,16 @@ export class AgentRunner {
       history,
       summary,
     });
+    const retrievalContext = this.contextBuilder.buildRetrievalContext(
+      history,
+      summary,
+      context,
+    );
+    const toolContext: AgentContext = {
+      ...context,
+      retrievalHistory: retrievalContext.history,
+      retrievalSummary: retrievalContext.summary,
+    };
     const messages = contextBuild.messages;
     state.contextUsage = contextBuild.usage;
     const { steps, toolResults } = state;
@@ -366,7 +374,7 @@ export class AgentRunner {
               toolName: toolCall.name,
               input,
             },
-            context,
+            toolContext,
           );
           this.emitEvent(onEvent, {
             type: 'tool_result',
@@ -436,11 +444,7 @@ export class AgentRunner {
       throw context.signal.reason;
     }
 
-    throw new AgentRunError(
-      'AGENT_CANCELLED',
-      '用户取消了本次生成',
-      state,
-    );
+    throw new AgentRunError('AGENT_CANCELLED', '用户取消了本次生成', state);
   }
 
   private readBoundedInteger(

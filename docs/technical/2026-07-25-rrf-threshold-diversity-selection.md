@@ -26,7 +26,7 @@
 - 评测 CLI 支持 vector baseline 与 hybrid RRF 使用同一数据集对比；
 - 新增融合、阈值、去重、多样性和预算测试。
 
-本轮不包含：
+2026-07-25 初始范围不包含（其中部分已在 2026-07-27 后续实现中完成）：
 
 - 在缺少真实 baseline 时写死最低相关阈值；
 - `NO_RELIABLE_CONTEXT` Agent 错误码；
@@ -156,6 +156,23 @@ Selection Trace 示例：
 
 正式聊天与 `knowledge_search` 当前仍使用 `vector_baseline`。只有真实报告证明 hybrid 策略收益且阈值完成校准后，才切换正式链路。
 
+2026-07-27 更新：正式 `knowledge_search` 已接入同一 Retrieval Trace 管线，并通过 `RAG_TOOL_RETRIEVAL_STRATEGY` 在 `vector_baseline` 与 `hybrid_rrf` 之间选择。真实评测显示 Hybrid 的整体 Hit@5、MRR 与 vector baseline 相同，但 P95 增加 181ms，因此默认仍为 `vector_baseline`；需要演示双路召回和 RRF 时可显式配置 `hybrid_rrf`。这表示 Hybrid 已进入正式链路，但不会在没有收益证据时强制成为默认策略。
+
+正式工具输出新增：
+
+```json
+{
+  "code": "OK",
+  "query": "它如何重放？",
+  "effectiveQuery": "Flow-Chat SSE 如何通过 afterSeq 重放事件？",
+  "knowledgeBaseId": "...",
+  "sources": [],
+  "retrievalTrace": {}
+}
+```
+
+没有任何候选通过选择管线时，`code` 为 `NO_RELIABLE_CONTEXT`。Agent 系统规则要求此时明确说明缺少可靠依据并请求补充信息，不能继续猜测。由于真实评测没有得到可泛化的最低分阈值，当前结构化拒答只覆盖“零入选候选”，不能把所有弱相关问题可靠识别为不可回答。
+
 ## 评测 CLI
 
 纯向量：
@@ -181,6 +198,7 @@ RAG_MIN_KEYWORD_SCORE           默认未配置，允许 0..1000
 RAG_MAX_CHUNKS_PER_DOCUMENT     默认 2，范围 1..10
 RAG_ADJACENT_CHUNK_DISTANCE     默认 1，范围 0..5
 RAG_CONTEXT_TOKEN_BUDGET        默认 4000，范围 256..16000
+RAG_TOOL_RETRIEVAL_STRATEGY     默认 vector_baseline，可选 hybrid_rrf
 ```
 
 ## 兼容性与安全
@@ -203,20 +221,37 @@ RAG_CONTEXT_TOKEN_BUDGET        默认 4000，范围 256..16000
 - `git diff --check`；
 - 新增测试覆盖双通道 RRF 优先、重复内容、相邻 chunk、文档配额、Token Budget、TopK、可选阈值和 KnowledgeService hybrid 接入。
 
-未执行：
+2026-07-25 初始实现时未执行（后续结果见下方 2026-07-27 更新）：
 
 - 项目 Jest 与 Nest build；
 - PostgreSQL + pgvector + GIN 的完整 hybrid 请求；
 - vector baseline 与 hybrid RRF 的真实指标对比。
 
-原因仍是当前电脑缺少 `AI-Chat-Be/node_modules`。需要在可运行电脑完成后，将真实结果补入技术文档。
+当时原因是该电脑缺少 `AI-Chat-Be/node_modules`。这些测试、构建和真实指标后来已在可运行环境完成，结果保存在 `2026-07-26-real-environment-validation-report.md`。
 
-## 已知限制与下一步
+## 已知限制与下一步（2026-07-27 更新）
 
-1. 完成真实 vector/hybrid 对比报告并校准两个分数阈值；
-2. 无可靠候选时返回结构化 `NO_RELIABLE_CONTEXT`；
-3. 将 `hybrid_rrf` 接入正式 `knowledge_search` 和回答引用；
-4. 把最终片段作为独立 RAG 区域纳入 Context Builder；
-5. 前端 Agent Trace 展示 Rewrite、两路候选、融合排名和过滤原因；
-6. 根据连续上下文失败样本决定是否关闭或放宽相邻 chunk 过滤；
-7. 指标仍不足时再评估 MMR 或模型 reranker。
+原下一步执行结果：
+
+1. [x] 完成真实 vector/hybrid 对比报告。阈值网格已校准，结论是保持两个生产阈值未配置，避免对单个样本过拟合；
+2. [x] 无入选候选时返回结构化 `NO_RELIABLE_CONTEXT`；
+3. [x] 将 `hybrid_rrf` 以可配置方式接入正式 `knowledge_search` 和回答引用，依据指标继续默认 `vector_baseline`；
+4. [x] Context Builder 为最终 RAG 片段使用独立 `RAG_CONTEXT_TOKEN_BUDGET`，送回模型时剥离候选诊断信息，只保留最终选中片段；
+5. [x] 前端 Agent Trace 展示 Rewrite、通道状态、候选排名、RRF、Token、过滤原因和最终选择，并通过已有 `agentSteps` JSON 在刷新后恢复；
+6. [x] 真实报告中最终过滤原因只有 `top_k_limit`，没有连续上下文失败证据，因此相邻距离继续保持可配置默认值 1，不额外收紧；
+7. [x] Hybrid 没有提升整体质量且尾延迟更高，当前不增加 MMR、cross-encoder 或 LLM reranker。
+
+本次实现验证：
+
+- 后端全量 Jest：25 suites、94 tests passed；
+- 后端 Nest build：passed；
+- 后端 `tsc --noEmit -p tsconfig.build.json`：passed；
+- 前端 PC 与 Plug build：passed；
+- PC `tsc --noEmit -p packages/ai-chat-pc/tsconfig.app.json`：passed。
+
+仍需真实页面验收：
+
+- 浏览器点击停止生成并观察 Agent Trace 的中断状态；
+- 使用 `RAG_TOOL_RETRIEVAL_STRATEGY=hybrid_rrf` 运行一轮真实知识库对话，确认检索解释面板的折叠、候选展示与刷新恢复；
+- 如未来扩充不可回答评测集并出现稳定分数分界，再重新评估生产阈值；
+- 点击引用定位标题路径、PDF 页码或原始 chunk 预览仍属于后续产品增强。

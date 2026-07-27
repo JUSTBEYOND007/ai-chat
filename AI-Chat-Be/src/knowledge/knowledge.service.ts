@@ -32,6 +32,7 @@ import {
 import {
   RetrievalCandidate,
   RetrievalChannelTrace,
+  RetrievalStrategy,
   RetrievalTrace,
 } from './contracts/retrieval';
 import { KnowledgeRetrievalOptions } from './contracts/retrieval-options';
@@ -64,6 +65,11 @@ export interface KnowledgeSource {
   score: number;
 }
 
+export interface KnowledgeToolSearchResult {
+  sources: KnowledgeSource[];
+  trace: RetrievalTrace;
+}
+
 export interface KnowledgeToolCall {
   name: 'knowledge_search';
   status: 'completed';
@@ -89,6 +95,10 @@ export class KnowledgeService implements OnModuleInit {
   private readonly llm: ChatOpenAI;
   private readonly vectorCandidateLimit: number;
   private readonly keywordCandidateLimit: number;
+  private readonly toolRetrievalStrategy: Extract<
+    RetrievalStrategy,
+    'vector_baseline' | 'hybrid_rrf'
+  >;
 
   constructor(
     @InjectRepository(KnowledgeBase)
@@ -137,6 +147,9 @@ export class KnowledgeService implements OnModuleInit {
       10,
       1,
       50,
+    );
+    this.toolRetrievalStrategy = this.readToolRetrievalStrategy(
+      this.configService.get<string>('RAG_TOOL_RETRIEVAL_STRATEGY'),
     );
   }
 
@@ -254,7 +267,9 @@ export class KnowledgeService implements OnModuleInit {
       }
 
       const chunks = await this.textSplitter.splitText(text);
-      await this.knowledgeChunkRepository.delete({ documentId: savedDocument.id });
+      await this.knowledgeChunkRepository.delete({
+        documentId: savedDocument.id,
+      });
 
       let indexedChunkCount = 0;
       for (let i = 0; i < chunks.length; i++) {
@@ -301,7 +316,9 @@ export class KnowledgeService implements OnModuleInit {
       };
     } catch (error) {
       try {
-        await this.knowledgeChunkRepository.delete({ documentId: savedDocument.id });
+        await this.knowledgeChunkRepository.delete({
+          documentId: savedDocument.id,
+        });
       } catch (cleanupError) {
         this.logger.warn(
           `Failed to cleanup chunks for failed document ${savedDocument.id}`,
@@ -375,7 +392,11 @@ export class KnowledgeService implements OnModuleInit {
     });
   }
 
-  async query(knowledgeBaseId: string, ragQueryDto: RagQueryDto, userId: number) {
+  async query(
+    knowledgeBaseId: string,
+    ragQueryDto: RagQueryDto,
+    userId: number,
+  ) {
     await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
 
     const chunks = await this.searchKnowledgeBase(
@@ -669,17 +690,44 @@ export class KnowledgeService implements OnModuleInit {
     topK: number,
     userId: number,
     signal?: AbortSignal,
-  ): Promise<KnowledgeSource[]> {
+    context: Pick<KnowledgeRetrievalOptions, 'history' | 'summary'> = {},
+  ): Promise<KnowledgeToolSearchResult> {
     await this.assertKnowledgeBaseOwner(knowledgeBaseId, userId);
     this.throwIfAborted(signal);
-    const chunks = await this.searchKnowledgeBase(
+    const trace = await this.searchKnowledgeBaseWithTrace(
       knowledgeBaseId,
       query,
       topK,
-      { signal },
+      {
+        strategy: this.toolRetrievalStrategy,
+        rewriteMode:
+          this.toolRetrievalStrategy === 'hybrid_rrf' ? 'auto' : 'never',
+        history: context.history,
+        summary: context.summary,
+        signal,
+      },
     );
     this.throwIfAborted(signal);
-    return this.toSources(chunks);
+    const chunks = trace.candidates
+      .filter((candidate) => candidate.selected)
+      .sort((left, right) => (left.finalRank || 0) - (right.finalRank || 0))
+      .map((candidate) => ({
+        id: candidate.candidateId,
+        documentId: candidate.documentId,
+        knowledgeBaseId: candidate.knowledgeBaseId,
+        chunkIndex: candidate.chunkIndex,
+        content: candidate.content,
+        metadata: candidate.metadata,
+        fileName: candidate.fileName,
+        score:
+          candidate.finalScore ??
+          candidate.channels.find((channel) => channel.channel === 'vector')
+            ?.score ??
+          0,
+        tokenCount: candidate.tokenCount,
+      }));
+
+    return { sources: this.toSources(chunks), trace };
   }
 
   async searchForDebug(
@@ -782,12 +830,7 @@ export class KnowledgeService implements OnModuleInit {
         ORDER BY score DESC, kc."chunkIndex" ASC
         LIMIT $2
       `,
-      [
-        knowledgeBaseId,
-        limit,
-        KnowledgeDocumentStatus.INDEXED,
-        searchQuery,
-      ],
+      [knowledgeBaseId, limit, KnowledgeDocumentStatus.INDEXED, searchQuery],
     )) as RetrievedChunk[];
     this.throwIfAborted(signal);
 
@@ -975,7 +1018,10 @@ export class KnowledgeService implements OnModuleInit {
     };
   }
 
-  private async assertKnowledgeBaseOwner(knowledgeBaseId: string, userId: number) {
+  private async assertKnowledgeBaseOwner(
+    knowledgeBaseId: string,
+    userId: number,
+  ) {
     const knowledgeBase = await this.knowledgeBaseRepository.findOne({
       where: { id: knowledgeBaseId, userId, isActive: true },
     });
@@ -1048,7 +1094,9 @@ ${query}
       await this.dataSource.query(
         'CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_search_vector_gin ON knowledge_chunk USING GIN ("searchVector")',
       );
-      this.logger.log('Knowledge vector and full-text retrieval schema is ready');
+      this.logger.log(
+        'Knowledge vector and full-text retrieval schema is ready',
+      );
     } catch (error) {
       this.logger.error('Failed to ensure knowledge retrieval schema', error);
     }
@@ -1159,10 +1207,7 @@ ${query}
     }
   }
 
-  private async writeChunkRetrievalData(
-    chunkId: string,
-    embedding: number[],
-  ) {
+  private async writeChunkRetrievalData(chunkId: string, embedding: number[]) {
     await this.dataSource.query(
       `UPDATE knowledge_chunk SET embedding = $1::vector, "searchVector" = to_tsvector('simple', COALESCE(content, '')) WHERE id = $2`,
       [this.toPgVector(embedding), chunkId],
@@ -1175,6 +1220,12 @@ ${query}
 
   private estimateTokenCount(content: string) {
     return Math.ceil(content.length / 4);
+  }
+
+  private readToolRetrievalStrategy(
+    value: string | undefined,
+  ): Extract<RetrievalStrategy, 'vector_baseline' | 'hybrid_rrf'> {
+    return value === 'hybrid_rrf' ? 'hybrid_rrf' : 'vector_baseline';
   }
 
   private readBoundedInteger(
